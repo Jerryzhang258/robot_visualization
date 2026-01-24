@@ -103,7 +103,7 @@ class Enhanced3DVisualizer(CombinedVisualizer):
     
     def _create_realistic_quest_controller(self, is_left=True):
         """创建Quest手柄"""
-        mesh_file = 'src/meshes/Oculus_Meta_Quest_Touch_Plus_Controller_Left.stl' if is_left else 'src/meshes/Oculus_Meta_Quest_Touch_Plus_Controller_Right.stl'
+        mesh_file = 'src/meshes/Oculus_Meta_Quest_Touch_Plus_Controller_Left.stl' if is_left else 'src/meshes/Assem1.STL'
         
         if not os.path.exists(mesh_file):
             cyl = trimesh.creation.cylinder(radius=0.015, height=0.08, sections=16)

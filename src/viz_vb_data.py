@@ -237,7 +237,7 @@ def _lookat_camera_pose(eye, center, up):
 def _quest_controller_mesh(is_left=True):
     """加载Quest手柄STL模型"""
     import os
-    mesh_file = 'src/meshes/Oculus_Meta_Quest_Touch_Plus_Controller_Left.stl' if is_left else 'src/meshes/Oculus_Meta_Quest_Touch_Plus_Controller_Right.stl'
+    mesh_file = 'src/meshes/Oculus_Meta_Quest_Touch_Plus_Controller_Left.stl' if is_left else 'src/meshes/Assem1.STL'
     
     if not os.path.exists(mesh_file):
         # 如果文件不存在，返回简单圆柱体

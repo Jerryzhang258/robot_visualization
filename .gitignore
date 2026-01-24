@@ -45,3 +45,8 @@ my_curves/
 *.swp
 *.swo
 .DS_Store
+
+# Large assets
+*.stl
+*.STL
+*.zarr.zip
