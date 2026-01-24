@@ -31,6 +31,7 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         self._show_raw_transforms = {0: False, 1: False}
         self._show_controller_mesh = True
         self._show_claw_finger_mesh = True
+        self._show_finger_axes = False
         self._world_camera_node = None
         self._world_light_nodes = []
         self._camera_translation_mode = False
@@ -68,8 +69,9 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         base.visual.vertex_colors = np.array([200, 200, 200, 255], dtype=np.uint8)
         self._cached_base_mesh = pyrender.Mesh.from_trimesh(base, smooth=False)
 
-        finger_path = 'src/meshes/gripper.STL'
-        # finger_path = 'src/meshes/finger.STL'
+        finger_path = 'src/meshes/finger.STL'
+        if not os.path.exists(finger_path):
+            finger_path = 'src/meshes/gripper.STL'
         assert os.path.exists(finger_path), f"缺少指尖网格文件: {finger_path}"
         try:
             finger_mesh = trimesh.load(finger_path)
@@ -234,7 +236,7 @@ class Enhanced3DVisualizer(CombinedVisualizer):
     
     def render_world_scene(self, current_idx):
         """渲染世界场景"""
-        from viz_vb_data import (_line_mesh, _pointcloud_mesh, RenderFlags)
+        from viz_vb_data import (_line_mesh, _pointcloud_mesh, RenderFlags, _finger_poses_from_width, _axis_mesh)
 
         if self._world_scene is None:
             self._init_world_scene_cache()
@@ -272,16 +274,35 @@ class Enhanced3DVisualizer(CombinedVisualizer):
                 if gripper_mesh:
                     self._world_dynamic_nodes.append(scene.add(gripper_mesh, pose=frame_pose))
 
-            if self._show_claw_finger_mesh:
-                gripper = self.data[prefix].get('gripper', [])
-                if gripper and current_idx < len(gripper):
+            gripper = self.data[prefix].get('gripper', [])
+            if gripper and current_idx < len(gripper):
+                if getattr(self, "finger_calibration", None):
+                    center_pose, left_pose, right_pose = _finger_poses_from_width(
+                        float(gripper[current_idx]),
+                        self.finger_calibration,
+                    )
+                else:
                     grip_width = float(gripper[current_idx])
                     offset = grip_width / 2.0
-                    for sign in [-1, 1]:
-                        finger_tf = np.eye(4)
-                        finger_tf[:3, :3] = Rotation.from_euler('x', 90, degrees=True).as_matrix()
-                        finger_tf[:3, 3] = [0.05, sign * (offset - 0.01), -0.04]
-                        self._world_dynamic_nodes.append(scene.add(self._cached_finger_mesh, pose=frame_pose @ finger_tf))
+                    center_pose = np.eye(4)
+                    center_pose[:3, :3] = Rotation.from_euler('x', 90, degrees=True).as_matrix()
+                    center_pose[:3, 3] = [0.05, 0.0, -0.04]
+                    left_pose = np.eye(4)
+                    right_pose = np.eye(4)
+                    left_pose[:3, :3] = center_pose[:3, :3]
+                    right_pose[:3, :3] = center_pose[:3, :3]
+                    left_pose[:3, 3] = [0.05, - (offset - 0.01), -0.04]
+                    right_pose[:3, 3] = [0.05, (offset - 0.01), -0.04]
+
+                if self._show_claw_finger_mesh:
+                    self._world_dynamic_nodes.append(scene.add(self._cached_finger_mesh, pose=frame_pose @ left_pose))
+                    self._world_dynamic_nodes.append(scene.add(self._cached_finger_mesh, pose=frame_pose @ right_pose))
+
+                if self._show_finger_axes:
+                    axis_mesh = self._cached_axis_mesh or _axis_mesh(size=0.05)
+                    self._world_dynamic_nodes.append(scene.add(axis_mesh, pose=frame_pose @ center_pose))
+                    self._world_dynamic_nodes.append(scene.add(axis_mesh, pose=frame_pose @ left_pose))
+                    self._world_dynamic_nodes.append(scene.add(axis_mesh, pose=frame_pose @ right_pose))
             # else:
             #     self._world_dynamic_nodes.append(scene.add(self._cached_gripper_mesh_right, pose=frame_pose))
             
@@ -567,7 +588,7 @@ class Enhanced3DVisualizer(CombinedVisualizer):
             cv2.putText(bar, label, (text_x, btn_y + 17), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, (220, 220, 220), 1, cv2.LINE_AA)
         
-        controls = "[A/D]Frame [W/S]Ep [P]Play [1-5]Speed [0]CamReset [T]CamMove [U/I]Raw [M]Ctrl [F]Claw [Q]Quit"
+        controls = "[A/D]Frame [W/S]Ep [P]Play [1-5]Speed [0]CamReset [T]CamMove [U/I]Raw [M]Ctrl [F]Claw [G]Axes [Q]Quit"
         cv2.putText(bar, controls, (20, 68), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (120, 120, 120), 1, cv2.LINE_AA)
         
@@ -622,6 +643,7 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         print("    [I]      显示Robot1原始变换")
         print("    [M]      显示夹爪网格")
         print("    [F]      显示手指网格")
+        print("    [G]      显示手指坐标轴")
         print("    [Q]      退出")
         print("=" * 70 + "\n")
         
@@ -747,12 +769,15 @@ class Enhanced3DVisualizer(CombinedVisualizer):
             elif key == ord('i'):
                 self._show_raw_transforms[1] = not self._show_raw_transforms[1]
                 print(f"Robot1原始变换: {'显示' if self._show_raw_transforms[1] else '隐藏'}")
-            elif key == ord('m'):
+            elif key in (ord('m'), ord('M')):
                 self._show_controller_mesh = not self._show_controller_mesh
                 print(f"夹爪网格: {'显示' if self._show_controller_mesh else '隐藏'}")
-            elif key == ord('f'):
+            elif key in (ord('f'), ord('F')):
                 self._show_claw_finger_mesh = not self._show_claw_finger_mesh
                 print(f"手指网格: {'显示' if self._show_claw_finger_mesh else '隐藏'}")
+            elif key in (ord('g'), ord('G')):
+                self._show_finger_axes = not self._show_finger_axes
+                print(f"手指坐标轴: {'显示' if self._show_finger_axes else '隐藏'}")
             elif key == ord('q'): 
                 print("\n退出\n")
                 break

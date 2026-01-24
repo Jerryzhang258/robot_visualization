@@ -1,5 +1,6 @@
+import json
 import numpy as np
-from scipy.spatial.transform import Rotation
+from scipy.spatial.transform import Rotation, Slerp
 import sys
 import os
 import cv2
@@ -16,6 +17,12 @@ if project_root not in sys.path:
 from replay_buffer import ReplayBuffer
 from imagecodecs_numcodecs import register_codecs
 register_codecs()
+
+FINGER_CALIBRATION_JSON = os.environ.get(
+    "FINGER_CALIBRATION_JSON",
+    os.path.join("src", "finger_calibrate", "output", "calibration_result.json"),
+)
+FINGER_CALIBRATION_SCALE = float(os.environ.get("FINGER_CALIBRATION_SCALE", "0.001"))
 
 # 传感器配置
 ROBOT_IDS = [0, 1]
@@ -396,6 +403,154 @@ def _gripper_boxes(opening_width, color=(1.0, 0.0, 0.0)):
     right_pose[:3, 3] = np.array([x_offset, half_offset, 0.0])
     return (left_mesh, left_pose), (right_mesh, right_pose)
 
+
+def _scale_transform(T, scale):
+    out = np.array(T, dtype=np.float64)
+    out[:3, 3] = out[:3, 3] * scale
+    return out
+
+
+def _fix_rotation(T):
+    u, _, vt = np.linalg.svd(T[:3, :3])
+    r = u @ vt
+    if np.linalg.det(r) < 0:
+        u[:, -1] *= -1
+        r = u @ vt
+    T[:3, :3] = r
+    return T
+
+
+def _average_transform(a, b):
+    t = 0.5 * (a[:3, 3] + b[:3, 3])
+    rotations = Rotation.from_matrix([a[:3, :3], b[:3, :3]])
+    slerp = Slerp([0, 1], rotations)
+    r = slerp(0.5).as_matrix()
+    out = np.eye(4)
+    out[:3, :3] = r
+    out[:3, 3] = t
+    return out
+
+
+def _tip_axis_vector(T, tip_axis):
+    axis_map = {
+        "x": (0, 1.0),
+        "-x": (0, -1.0),
+        "y": (1, 1.0),
+        "-y": (1, -1.0),
+        "z": (2, 1.0),
+        "-z": (2, -1.0),
+    }
+    idx, sign = axis_map.get(tip_axis, (2, 1.0))
+    return T[:3, idx] * sign
+
+
+def _compute_center_pose(t_left, t_right, tip_axis="z"):
+    left_pos = t_left[:3, 3]
+    right_pos = t_right[:3, 3]
+    delta = left_pos - right_pos
+    delta_norm = np.linalg.norm(delta)
+    if delta_norm < 1e-6:
+        return _average_transform(t_left, t_right)
+    x_axis = delta / delta_norm
+
+    z_axis = _tip_axis_vector(t_left, tip_axis) + _tip_axis_vector(t_right, tip_axis)
+    z_norm = np.linalg.norm(z_axis)
+    if z_norm < 1e-6:
+        return _average_transform(t_left, t_right)
+    z_axis = z_axis / z_norm
+
+    y_axis = np.cross(z_axis, x_axis)
+    y_norm = np.linalg.norm(y_axis)
+    if y_norm < 1e-6:
+        return _average_transform(t_left, t_right)
+    y_axis = y_axis / y_norm
+    x_axis = np.cross(y_axis, z_axis)
+    x_axis = x_axis / (np.linalg.norm(x_axis) + 1e-9)
+
+    if np.dot(x_axis, delta) < 0:
+        x_axis = -x_axis
+        y_axis = -y_axis
+
+    center = np.eye(4)
+    center[:3, 0] = x_axis
+    center[:3, 1] = y_axis
+    center[:3, 2] = z_axis
+    center[:3, 3] = 0.5 * (left_pos + right_pos)
+    return center
+
+
+def _load_finger_mesh():
+    finger_path = os.path.join("src", "meshes", "finger.STL")
+    if not os.path.exists(finger_path):
+        return None
+    mesh = trimesh.load(finger_path)
+    mesh.apply_scale(FINGER_CALIBRATION_SCALE)
+    mesh.visual.vertex_colors = np.array([150, 150, 150, 255], dtype=np.uint8)
+    return pyrender.Mesh.from_trimesh(mesh, smooth=True)
+
+
+def _load_finger_calibration():
+    if not os.path.exists(FINGER_CALIBRATION_JSON):
+        return None
+    with open(FINGER_CALIBRATION_JSON, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    tip_axis = data.get("tip_axis", "z")
+    if "transform_finger_left_to_no_finger" in data:
+        t_left = np.array(data["transform_finger_left_to_no_finger"], dtype=np.float64)
+        t_right = np.array(data["transform_finger_right_to_no_finger"], dtype=np.float64)
+    else:
+        t_nf_to_assem = np.array(data["transform_no_finger_to_assem"], dtype=np.float64)
+        t_left_assem = np.array(data["transform_finger_left"], dtype=np.float64)
+        t_right_assem = np.array(data["transform_finger_right"], dtype=np.float64)
+        t_nf_to_assem_inv = np.linalg.inv(t_nf_to_assem)
+        t_left = t_nf_to_assem_inv @ t_left_assem
+        t_right = t_nf_to_assem_inv @ t_right_assem
+    t_center = _compute_center_pose(t_left, t_right, tip_axis=tip_axis)
+
+    t_left = _scale_transform(t_left, FINGER_CALIBRATION_SCALE)
+    t_right = _scale_transform(t_right, FINGER_CALIBRATION_SCALE)
+    t_center = _scale_transform(t_center, FINGER_CALIBRATION_SCALE)
+    t_left = _fix_rotation(t_left)
+    t_right = _fix_rotation(t_right)
+    t_center = _fix_rotation(t_center)
+
+    delta = t_right[:3, 3] - t_left[:3, 3]
+    norm = np.linalg.norm(delta)
+    if norm < 1e-6:
+        axis = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+    else:
+        axis = delta / norm
+
+    return {
+        "left_to_no_finger": t_left,
+        "right_to_no_finger": t_right,
+        "center_to_no_finger": t_center,
+        "open_axis_no_finger": axis,
+        "tip_axis": tip_axis,
+    }
+
+
+def _finger_poses_from_width(gripper_width, calibration):
+    center = calibration["center_to_no_finger"].copy()
+    axis = calibration["open_axis_no_finger"]
+    half = float(gripper_width) * 0.5
+    center_pos = center[:3, 3]
+    left_pos = center_pos - axis * half
+    right_pos = center_pos + axis * half
+
+    rot_z_pi = Rotation.from_euler("z", 180, degrees=True).as_matrix()
+    left_rot = calibration["left_to_no_finger"][:3, :3]
+    right_rot = left_rot @ rot_z_pi
+
+    left_pose = np.eye(4)
+    right_pose = np.eye(4)
+    left_pose[:3, :3] = left_rot
+    right_pose[:3, :3] = right_rot
+    left_pose[:3, 3] = left_pos
+    right_pose[:3, 3] = right_pos
+    return center, left_pose, right_pose
+
 class CombinedVisualizer:
     def __init__(self, replay_buffer, episodes, record_mode=False, record_episode=0, 
                  output_video=None, record_fps=30, continue_after_record=False):
@@ -448,6 +603,9 @@ class CombinedVisualizer:
         self.render_size = (400, 300)
         self.world_render_size = (self.render_size[0] * 2, self.render_size[1] * 2)
         self.renderers = {}
+        self.finger_calibration = _load_finger_calibration()
+        self.finger_mesh = _load_finger_mesh() if self.finger_calibration else None
+        self.finger_center_poses = {r: None for r in ROBOT_IDS}
         
         # 点云渲染器
         for r in ROBOT_IDS:
@@ -515,9 +673,14 @@ class CombinedVisualizer:
         scene.add(placeholder_cad, pose=frame_pose @ cad_offset)
 
         if gripper_width is not None:
-            (left_mesh, left_pose), (right_mesh, right_pose) = _gripper_boxes(gripper_width)
-            scene.add(left_mesh, pose=frame_pose @ left_pose)
-            scene.add(right_mesh, pose=frame_pose @ right_pose)
+            if self.finger_calibration and self.finger_mesh:
+                _, left_pose, right_pose = _finger_poses_from_width(gripper_width, self.finger_calibration)
+                scene.add(self.finger_mesh, pose=frame_pose @ left_pose)
+                scene.add(self.finger_mesh, pose=frame_pose @ right_pose)
+            else:
+                (left_mesh, left_pose), (right_mesh, right_pose) = _gripper_boxes(gripper_width)
+                scene.add(left_mesh, pose=frame_pose @ left_pose)
+                scene.add(right_mesh, pose=frame_pose @ right_pose)
             
             # Quest手柄（垂直向上）
             ctrl = _quest_controller_mesh(is_left=(r==1))  # 左手装右手柄，右手装左手柄
@@ -597,6 +760,12 @@ class CombinedVisualizer:
                     (left_mesh, left_pose), (right_mesh, right_pose) = _gripper_boxes(float(gripper[current_idx]))
                     scene.add(left_mesh, pose=frame_pose @ left_pose)
                     scene.add(right_mesh, pose=frame_pose @ right_pose)
+
+                if self.finger_calibration and self.finger_mesh:
+                    center_pose, left_pose, right_pose = _finger_poses_from_width(float(gripper[current_idx]), self.finger_calibration)
+                    self.finger_center_poses[r] = frame_pose @ center_pose
+                    scene.add(self.finger_mesh, pose=frame_pose @ left_pose)
+                    scene.add(self.finger_mesh, pose=frame_pose @ right_pose)
             
             # 手腕连接件（圆柱）
             wrist = trimesh.creation.cylinder(radius=0.02, height=0.04, sections=16)
@@ -829,5 +998,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

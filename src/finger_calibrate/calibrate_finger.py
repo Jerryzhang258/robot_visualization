@@ -1,10 +1,12 @@
 import argparse
 import json
 import os
+import datetime
 
 import numpy as np
 import trimesh
 from scipy.spatial.transform import Rotation, Slerp
+from scipy.spatial import cKDTree
 import pyglet
 from trimesh.viewer import SceneViewer
 from pyglet.window import key as pyglet_key
@@ -50,6 +52,14 @@ def _rigid_transform(T):
         r = u @ vt
     out[:3, :3] = r
     return out
+
+
+def _mean_nn_distance(src_pts, target_pts):
+    if len(src_pts) == 0 or len(target_pts) == 0:
+        return float("inf")
+    tree = cKDTree(target_pts)
+    dist, _ = tree.query(src_pts, k=1)
+    return float(np.mean(dist))
 
 
 def _initial_align(source_pts, target_pts):
@@ -319,6 +329,17 @@ def _align_local_axis(T, axis_name, target_dir):
     return T
 
 
+def _align_axis_in_world(center_pose, left_rel, axis_index, target_dir):
+    left_tf = center_pose @ left_rel
+    axis_vec = left_tf[:3, axis_index]
+    if np.linalg.norm(axis_vec) < 1e-9:
+        return left_rel
+    target = target_dir / (np.linalg.norm(target_dir) + 1e-9)
+    rot = trimesh.geometry.align_vectors(axis_vec, target)
+    left_tf = rot @ left_tf
+    return np.linalg.inv(center_pose) @ left_tf
+
+
 class _NudgeViewer(SceneViewer):
     def __init__(self, scene, state):
         self.state = state
@@ -346,6 +367,25 @@ class _NudgeViewer(SceneViewer):
                 f"Steps: translation={self.state['t_step']:.4f}m "
                 f"rotation={self.state['r_step']:.1f}deg target={self.state['target']}"
             )
+            return
+        if symbol == pyglet_key.P:
+            _save_nudge_snapshot(self.state["save_dir"], self.state["center_pose"], self.state["left_rel"])
+            print("Saved nudge snapshot.")
+            return
+        if symbol in (pyglet_key.X, pyglet_key.Y, pyglet_key.Z):
+            axis_map = {pyglet_key.X: 0, pyglet_key.Y: 1, pyglet_key.Z: 2}
+            axis_index = axis_map[symbol]
+            toggle_key = f"align_toggle_{axis_index}"
+            self.state[toggle_key] = not self.state.get(toggle_key, False)
+            sign = 1.0 if self.state[toggle_key] else -1.0
+            target = self.state["center_pose"][:3, axis_index] * sign
+            self.state["left_rel"] = _align_axis_in_world(
+                self.state["center_pose"],
+                self.state["left_rel"],
+                axis_index,
+                target,
+            )
+            self._refresh()
             return
         if symbol == pyglet_key.BRACKETLEFT:
             self.state["t_step"] = max(self.state["t_step"] * 0.5, 1e-5)
@@ -413,7 +453,20 @@ class _NudgeViewer(SceneViewer):
         self.flip()
 
 
-def _nudge_initial_loop(no_finger_aligned, assem, finger, center_pose, left_rel, inward_axis="x"):
+def _save_nudge_snapshot(save_dir, center_pose, left_rel):
+    os.makedirs(save_dir, exist_ok=True)
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = os.path.join(save_dir, f"nudge_snapshot_{ts}.json")
+    payload = {
+        "center_pose": center_pose.tolist(),
+        "left_rel": left_rel.tolist(),
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    return path
+
+def _nudge_initial_loop(no_finger_aligned, assem, finger, center_pose, left_rel, inward_axis="x",
+                        save_dir="src/finger_calibrate/output", tip_axis="z"):
     if hasattr(assem, "extents"):
         axis_scale = float(max(assem.extents)) * 0.2
     else:
@@ -429,6 +482,8 @@ def _nudge_initial_loop(no_finger_aligned, assem, finger, center_pose, left_rel,
         "  [ / ]        translation step down/up\n"
         "  ; / '        rotation step down/up\n"
         "  v            view current steps\n"
+        "  x/y/z        align finger tip axis to center X/Y/Z (toggles +/-)\n"
+        "  p            save current poses snapshot\n"
         "  enter        accept and start optimization\n"
         "  q/esc        quit without saving\n"
     )
@@ -464,6 +519,8 @@ def _nudge_initial_loop(no_finger_aligned, assem, finger, center_pose, left_rel,
         "t_step": t_step,
         "r_step": r_step,
         "finger": finger,
+        "save_dir": save_dir,
+        "tip_axis": tip_axis,
     }
     viewer = _NudgeViewer(scene, state)
     pyglet.app.run()
@@ -476,7 +533,7 @@ def calibrate(no_finger_path, finger_path, assem_path, out_dir,
               samples=50000, icp_iters=1500, residual_thresh=0.1,
               split_axis="y", split_value=0.0, manual=False,
               tip_axis="z", symmetric=True, nudge=False,
-              inward_axis="x"):
+              inward_axis="x", keep_best=True):
     no_finger = trimesh.load(no_finger_path)
     finger = trimesh.load(finger_path)
     assem = trimesh.load(assem_path)
@@ -515,26 +572,53 @@ def calibrate(no_finger_path, finger_path, assem_path, out_dir,
             center_pose_assem,
             left_rel,
             inward_axis=inward_axis,
+            save_dir=out_dir,
+            tip_axis=tip_axis,
         )
         if center_pose_assem is None:
             print("Initial nudging canceled. No output saved.")
             return None
+    initial_left = center_pose_assem @ left_rel
+    mirror = np.eye(4)
+    mirror[0, 0] = -1.0  # mirror across center YZ plane
+    initial_right = center_pose_assem @ (mirror @ left_rel)
+
     t_finger_left = _rigid_transform(_run_icp(
         finger_pts,
         left_pts,
-        initial=center_pose_assem @ left_rel,
+        initial=initial_left,
         max_iterations=icp_iters,
     ))
     if symmetric:
         left_rel = np.linalg.inv(center_pose_assem) @ t_finger_left
-        mirror = np.eye(4)
-        mirror[0, 0] = -1.0  # mirror across center YZ plane
         t_finger_right = center_pose_assem @ (mirror @ left_rel)
     else:
         init_right = _initial_align(finger_pts, right_pts)
         t_finger_right = _rigid_transform(_run_icp(
             finger_pts, right_pts, initial=init_right, max_iterations=icp_iters
         ))
+
+    if keep_best:
+        initial_left_dist = _mean_nn_distance(
+            finger_pts @ initial_left[:3, :3].T + initial_left[:3, 3],
+            left_pts,
+        )
+        opt_left_dist = _mean_nn_distance(
+            finger_pts @ t_finger_left[:3, :3].T + t_finger_left[:3, 3],
+            left_pts,
+        )
+        initial_right_dist = _mean_nn_distance(
+            finger_pts @ initial_right[:3, :3].T + initial_right[:3, 3],
+            right_pts,
+        )
+        opt_right_dist = _mean_nn_distance(
+            finger_pts @ t_finger_right[:3, :3].T + t_finger_right[:3, 3],
+            right_pts,
+        )
+        if opt_left_dist + opt_right_dist > initial_left_dist + initial_right_dist:
+            print("Optimization increased residuals; keeping initial pose.")
+            t_finger_left = initial_left
+            t_finger_right = initial_right
 
     if manual:
         adjust_left, adjust_right = _manual_adjust_loop(
@@ -622,6 +706,8 @@ def main():
     parser.add_argument("--manual", action="store_true", help="Show viewer and allow manual adjustments before saving.")
     parser.add_argument("--nudge", action="store_true",
                         help="Nudge initial center/finger poses before optimization.")
+    parser.add_argument("--no-keep-best", action="store_true",
+                        help="Allow ICP result even if residuals increase.")
     args = parser.parse_args()
 
     calibrate(
@@ -639,6 +725,7 @@ def main():
         symmetric=(not args.no_symmetric),
         nudge=args.nudge,
         inward_axis=args.inward_axis,
+        keep_best=(not args.no_keep_best),
     )
 
 
