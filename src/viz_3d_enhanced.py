@@ -310,9 +310,11 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         max_frames = len(self.data['robot0']['poses'])
         
         plots = [
-            ("Robot 0 Position (m)", ['robot0'], ['X', 'Y', 'Z'], [(255, 10, 10), (10, 255, 10), (10, 10, 255)]),
-            ("Robot 1 Position (m)", ['robot1'], ['X', 'Y', 'Z'], [(255, 10, 10), (10, 255, 10), (10, 10, 255)]),
-            ("Gripper Width (m)", ['robot0', 'robot1'], ['R0', 'R1'], [(255, 100, 100), (100, 255, 100)])
+            ("Left Arm Position (m)", ['robot0'], ['X', 'Y', 'Z'], [(255, 100, 100), (100, 255, 100), (100, 100, 255)]),
+            ("Left Arm Rotation (deg)", ['left'], ['Roll', 'Pitch', 'Yaw'], [(255, 150, 150), (150, 255, 150), (150, 150, 255)]),
+            ("Right Arm Position (m)", ['robot1'], ['X', 'Y', 'Z'], [(255, 100, 100), (100, 255, 100), (100, 100, 255)]),
+            ("Right Arm Rotation (deg)", ['right'], ['Roll', 'Pitch', 'Yaw'], [(255, 150, 150), (150, 255, 150), (150, 150, 255)]),
+            ("Gripper Width (m)", ['robot0', 'robot1'], ['Left', 'Right'], [(255, 100, 100), (100, 255, 100)])
         ]
         
         for plot_name, robots, labels, colors in plots:
@@ -378,6 +380,65 @@ class Enhanced3DVisualizer(CombinedVisualizer):
                         cv2.putText(panel, axis_name, (legend_x + 10, y_offset + 13), 
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1, cv2.LINE_AA)
                         legend_x += 40
+            
+            
+            elif "Rotation" in plot_name:
+                # 从pose矩阵提取Roll/Pitch/Yaw
+                arm = "left" if "Left" in plot_name else "right"
+                robot_id = 0 if arm == "left" else 1
+                prefix = f'robot{robot_id}'
+                poses = self.data[prefix].get('poses', [])
+                
+                if poses and len(poses) > 0:
+                    from scipy.spatial.transform import Rotation as R
+                    all_rpy = []
+                    for pose in poses:
+                        rot_matrix = pose[:3, :3]
+                        r = R.from_matrix(rot_matrix)
+                        rpy = r.as_euler('xyz', degrees=True)  # Roll, Pitch, Yaw
+                        all_rpy.append(rpy)
+                    
+                    all_rpy = np.array(all_rpy)
+                    
+                    for axis_idx, (axis_name, color) in enumerate(zip(labels, colors)):
+                        if len(all_rpy) > 1:
+                            data = all_rpy[:, axis_idx]
+                            data_min, data_max = data.min(), data.max()
+                            data_range = data_max - data_min if data_max > data_min else 1.0
+                            
+                            # 虚线（全轨迹）
+                            for i in range(1, len(data)):
+                                x1 = int(plot_x_start + (i - 1) / max_frames * plot_w)
+                                y1 = int(y_offset + (plot_h - 20) - ((data[i-1] - data_min) / data_range) * (plot_h - 30))
+                                x2 = int(plot_x_start + i / max_frames * plot_w)
+                                y2 = int(y_offset + (plot_h - 20) - ((data[i] - data_min) / data_range) * (plot_h - 30))
+                                dark_color = tuple(int(c * 0.3) for c in color)
+                                cv2.line(panel, (x1, y1), (x2, y2), dark_color, 1, cv2.LINE_AA)
+                            
+                            # 实线（当前进度）
+                            for i in range(1, min(frame_idx + 1, len(data))):
+                                x1 = int(plot_x_start + (i - 1) / max_frames * plot_w)
+                                y1 = int(y_offset + (plot_h - 20) - ((data[i-1] - data_min) / data_range) * (plot_h - 30))
+                                x2 = int(plot_x_start + i / max_frames * plot_w)
+                                y2 = int(y_offset + (plot_h - 20) - ((data[i] - data_min) / data_range) * (plot_h - 30))
+                                cv2.line(panel, (x1, y1), (x2, y2), color, 2, cv2.LINE_AA)
+                            
+                            # Y轴标签（按颜色错开）
+                            label_x = 5
+                            label_y_up = y_offset + 10 + axis_idx * 12
+                            label_y_down = y_offset + plot_h - 25 - axis_idx * 12
+                            cv2.putText(panel, f"{data_max:.2f}", (label_x, label_y_up), 
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.3, color, 1, cv2.LINE_AA)
+                            cv2.putText(panel, f"{data_min:.2f}", (label_x, label_y_down), 
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.3, color, 1, cv2.LINE_AA)
+                    
+                    # 图例
+                    legend_x = plot_x_start + 5
+                    for axis_name, color in zip(labels, colors):
+                        cv2.circle(panel, (legend_x, y_offset + 10), 4, color, -1)
+                        cv2.putText(panel, axis_name, (legend_x + 10, y_offset + 13), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1, cv2.LINE_AA)
+                        legend_x += 60
             
             elif "Gripper" in plot_name:
                 all_gripper_series = []
