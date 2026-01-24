@@ -45,3 +45,5 @@ my_curves/
 *.swp
 *.swo
 .DS_Store
+
+*.mp4

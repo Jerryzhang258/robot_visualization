@@ -23,7 +23,7 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         self._cached_axis_mesh = None
         self._cached_wrist_mesh = None
         self._cached_base_mesh = None
-        self._cached_sensor_meshes = None
+        self._cached_sensor_mesh = None
         self._cached_controller_meshes = None
         self._cached_gripper_mesh_left = None
         self._cached_gripper_mesh_right = None
@@ -57,30 +57,31 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         base.visual.vertex_colors = np.array([200, 200, 200, 255], dtype=np.uint8)
         self._cached_base_mesh = pyrender.Mesh.from_trimesh(base, smooth=False)
 
-        self._cached_sensor_meshes = {
-            'left': self._create_sensor_mesh([0, 255, 0]),
-            'right': self._create_sensor_mesh([255, 0, 0])
-        }
+        sensor_path = 'src/meshes/sensor.STL'
+        assert os.path.exists(sensor_path), f"缺少传感器网格文件: {sensor_path}"
+        sensor_mesh = trimesh.load(sensor_path)
+        sensor_mesh.apply_scale(0.001)
+        sensor_mesh.visual.vertex_colors = np.array([150, 150, 150, 255], dtype=np.uint8)
+        self._cached_sensor_mesh = pyrender.Mesh.from_trimesh(sensor_mesh, smooth=True)
 
-        self._cached_controller_meshes = {
-            'left': self._create_realistic_quest_controller(is_left=True),
-            'right': self._create_realistic_quest_controller(is_left=False)
-        }
+        # load gripper meshes
+        left_system_path = 'src/meshes/left_no_finger.STL'
+        # right_system_path = 'src/meshes/right_no_finger.STL'
+        assert os.path.exists(left_system_path), f"缺少夹爪网格文件: {left_system_path}"
+        # assert os.path.exists(right_system_path), f"缺少夹爪网格文件: {right_system_path}"
 
-        gripper_base_mesh = self._load_real_gripper_stl()
-        if gripper_base_mesh is not None:
-            left_gripper = gripper_base_mesh.copy()
-            left_gripper.visual.vertex_colors = np.array([180, 180, 180, 255], dtype=np.uint8)
-            self._cached_gripper_mesh_left = pyrender.Mesh.from_trimesh(left_gripper, smooth=True)
+        left_gripper_mesh = trimesh.load(left_system_path)
+        left_gripper_mesh.apply_scale(0.001)
+        left_gripper_mesh.visual.vertex_colors = np.array([180, 180, 180, 255], dtype=np.uint8)
+        self._cached_gripper_mesh_left = pyrender.Mesh.from_trimesh(left_gripper_mesh, smooth=True)
 
-            right_gripper = gripper_base_mesh.copy()
-            mirror = np.eye(4)
-            mirror[1, 1] = -1
-            right_gripper.apply_transform(mirror)
-            right_gripper.visual.vertex_colors = np.array([180, 180, 180, 255], dtype=np.uint8)
-            self._cached_gripper_mesh_right = pyrender.Mesh.from_trimesh(right_gripper, smooth=True)
+        # right_gripper_mesh = trimesh.load(right_system_path)
+        # right_gripper_mesh.apply_scale(0.001)
+        # right_gripper_mesh.visual.vertex_colors = np.array([180, 180, 180, 255], dtype=np.uint8)
+        # self._cached_gripper_mesh_right = pyrender.Mesh.from_trimesh(right_gripper_mesh, smooth=True)
 
-        cam_pose = _lookat_camera_pose([0.05, -0.3, 0.4], [0, 0, 0], [0, 0, 1])
+
+        cam_pose = _lookat_camera_pose([0.15, -0.3, 0.4], [0, 0, 0], [0, 0, 1])
         self._world_camera_pose = cam_pose
         camera = pyrender.PerspectiveCamera(yfov=np.deg2rad(60.0))
         scene.add(camera, pose=cam_pose)
@@ -95,46 +96,7 @@ class Enhanced3DVisualizer(CombinedVisualizer):
 
         self._world_scene = scene
         self._world_dynamic_nodes = []
-
-    def _create_sensor_mesh(self, color_rgb):
-        sensor = trimesh.creation.cylinder(radius=0.012, height=0.003, sections=16)
-        sensor.visual.vertex_colors = np.array(color_rgb + [255], dtype=np.uint8)
-        return pyrender.Mesh.from_trimesh(sensor, smooth=True)
     
-    def _create_realistic_quest_controller(self, is_left=True):
-        """创建Quest手柄"""
-        mesh_file = 'src/meshes/Oculus_Meta_Quest_Touch_Plus_Controller_Left.stl' if is_left else 'src/meshes/Oculus_Meta_Quest_Touch_Plus_Controller_Right.stl'
-        
-        if not os.path.exists(mesh_file):
-            cyl = trimesh.creation.cylinder(radius=0.015, height=0.08, sections=16)
-            rgba = np.array([0.4, 0.4, 0.4, 1.0])
-            cyl.visual.vertex_colors = (rgba * 255).astype(np.uint8)
-            return pyrender.Mesh.from_trimesh(cyl, smooth=False)
-        
-        mesh = trimesh.load(mesh_file)
-        mesh.apply_scale(0.0015)
-        rgba = np.array([0.4, 0.4, 0.4, 1.0])
-        mesh.visual.vertex_colors = (rgba * 255).astype(np.uint8)
-        return pyrender.Mesh.from_trimesh(mesh, smooth=True)
-    
-    def _load_real_gripper_stl(self):
-        """加载真实的夹爪STL文件"""
-        filepath = 'src/meshes/夹爪.STL'
-        if not os.path.exists(filepath):
-            return None
-        try:
-            mesh = trimesh.load(filepath)
-            mesh.apply_scale(0.001)
-            center = (mesh.bounds[0] + mesh.bounds[1]) / 2
-            mesh.apply_translation(-center)
-            rot_matrix = Rotation.from_euler('y', 180, degrees=True).as_matrix()
-            transform = np.eye(4)
-            transform[:3, :3] = rot_matrix
-            mesh.apply_transform(transform)
-            mesh.visual.vertex_colors = np.array([180, 180, 180, 255], dtype=np.uint8)
-            return mesh
-        except:
-            return None
     
     def _create_floor_grid_solid(self, size=2.0, step=0.2):
         """创建地面网格"""
@@ -241,53 +203,22 @@ class Enhanced3DVisualizer(CombinedVisualizer):
                 self._world_dynamic_nodes.append(scene.add(pts_mesh))
 
             frame_pose = poses[current_idx]
-            combined_rotation = Rotation.from_euler('xz', [180, 90], degrees=True).as_matrix()
-            flip_tf = np.eye(4)
-            flip_tf[:3, :3] = combined_rotation
-            flipped_pose = frame_pose @ flip_tf
             
-            if self._cached_axis_mesh is not None:
-                self._world_dynamic_nodes.append(scene.add(self._cached_axis_mesh, pose=flipped_pose))
-            
-            ctrl = self._cached_controller_meshes['left'] if r == 1 else self._cached_controller_meshes['right']
-            if ctrl:
-                ctrl_tf = np.eye(4)
-                rot = Rotation.from_euler('y', 90, degrees=True).as_matrix()
-                ctrl_tf[:3, :3] = rot
-                ctrl_tf[:3, 3] = [0, 0, 0.05]
-                self._world_dynamic_nodes.append(scene.add(ctrl, pose=flipped_pose @ ctrl_tf))
-            
-            wrist_tf = np.eye(4)
-            wrist_tf[:3, 3] = [0, 0, 0.01]
-            if self._cached_wrist_mesh is not None:
-                self._world_dynamic_nodes.append(scene.add(self._cached_wrist_mesh, pose=flipped_pose @ wrist_tf))
-            
-            base_tf = np.eye(4)
-            base_tf[:3, 3] = [0, 0, -0.02]
-            if self._cached_base_mesh is not None:
-                self._world_dynamic_nodes.append(scene.add(self._cached_base_mesh, pose=flipped_pose @ base_tf))
+            if r == 0:
+                self._world_dynamic_nodes.append(scene.add(self._cached_gripper_mesh_left, pose=frame_pose))
+            # else:
+            #     self._world_dynamic_nodes.append(scene.add(self._cached_gripper_mesh_right, pose=frame_pose))
             
             gripper = self.data[prefix].get('gripper', [])
             if gripper and current_idx < len(gripper):
                 grip_width = float(gripper[current_idx])
-                offset = max(grip_width * 0.5, 0.03)
+                offset = max(grip_width * 0.5, 0.03)  # TODO: check @liuchaoyi
                 
-                if self._cached_gripper_mesh_left is not None and self._cached_gripper_mesh_right is not None:
-                    left_tf = np.eye(4)
-                    left_tf[:3, 3] = [0.02, -offset, -0.04]
-                    self._world_dynamic_nodes.append(scene.add(self._cached_gripper_mesh_left, pose=flipped_pose @ left_tf))
-                    
-                    right_tf = np.eye(4)
-                    right_tf[:3, 3] = [0.02, offset, -0.04]
-                    self._world_dynamic_nodes.append(scene.add(self._cached_gripper_mesh_right, pose=flipped_pose @ right_tf))
-                
-                for side, sign, color_rgb in [('left', -1, [0, 255, 0]), ('right', 1, [255, 0, 0])]:
-                    sensor_mesh = self._cached_sensor_meshes[side] if self._cached_sensor_meshes else None
+                for sign in [-1, 1]:
                     sensor_tf = np.eye(4)
-                    sensor_tf[:3, :3] = Rotation.from_euler('x', 90, degrees=True).as_matrix()
+                    sensor_tf[:3, :3] = Rotation.from_euler('x', 90, degrees=True).as_matrix()  # TODO: sensor orientation check
                     sensor_tf[:3, 3] = [0.05, sign * (offset - 0.01), -0.04]
-                    if sensor_mesh is not None:
-                        self._world_dynamic_nodes.append(scene.add(sensor_mesh, pose=flipped_pose @ sensor_tf))
+                    self._world_dynamic_nodes.append(scene.add(self._cached_sensor_mesh, pose=frame_pose @ sensor_tf))
 
         color_img, _ = self.renderers['world'].render(scene, flags=RenderFlags.RGBA)
         return color_img[:, :, :3]
@@ -476,7 +407,12 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         # 中文标题
         im = Image.fromarray(cv2.cvtColor(header, cv2.COLOR_BGR2RGB))
         dr = ImageDraw.Draw(im)
-        ft = ImageFont.truetype("/System/Library/Fonts/Hiragino Sans GB.ttc", 24)
+        try:
+            ft = ImageFont.truetype("simhei.ttf", 24, encoding="utf-8")
+        except IOError:
+            print("未找到字体文件，使用默认字体，可能无法显示中文")
+            ft = ImageFont.load_default()
+        # ft = ImageFont.truetype("/System/Library/Fonts/Hiragino Sans GB.ttc", 24)
         dr.text((20, 38), "机器人监控", font=ft, fill=(255, 255, 255))
         header = cv2.cvtColor(np.array(im), cv2.COLOR_RGB2BGR)
         
@@ -712,7 +648,7 @@ def main():
     from replay_buffer import ReplayBuffer
     
     parser = argparse.ArgumentParser()
-    parser.add_argument('zarr_path', nargs='?', default='data/_0115_bi_pick_and_place_2ver.zarr.zip')
+    parser.add_argument('zarr_path', nargs='?', default=r'C:\Users\ruich\Downloads\_0118_bi_pick_and_place2.zarr.zip')
     parser.add_argument('--record', '-r', action='store_true')
     parser.add_argument('--record_episode', '-e', type=int, default=1)
     parser.add_argument('--output_video', '-o', type=str, default=None)
