@@ -7,32 +7,15 @@ __pycache__/
 venv/
 env/
 *.egg-info/
-dist/
-build/
 
 # 数据文件
-*.zarr
 *.zarr.zip
-*.mp4
-*.avi
-*.png
-*.jpg
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# Mac
-.DS_Store
-
-# 其他
-*.log
+data/
 
 # 临时脚本
 add_*.py
 fix_*.py
+*_fix.py
 complete_*.py
 ensure_*.py
 final_*.py
@@ -40,13 +23,14 @@ layout_*.py
 maximize_*.py
 one_*.py
 replace_*.py
-simple_*.py
 adjust_*.py
 diagnose_*.py
 analyze_*.py
 debug_*.py
+simple_*.py
+test_*.py
 
-# 备份文件
+# 备份
 *.backup
 *.backup2
 
@@ -54,3 +38,10 @@ debug_*.py
 curves_export/
 test_export/
 my_curves/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
