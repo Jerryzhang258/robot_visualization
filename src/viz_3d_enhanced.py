@@ -310,11 +310,11 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         max_frames = len(self.data['robot0']['poses'])
         
         plots = [
-            ("Left Arm Position (m)", ['robot0'], ['X', 'Y', 'Z'], [(255, 100, 100), (100, 255, 100), (100, 100, 255)]),
-            ("Left Arm Rotation (deg)", ['left'], ['Roll', 'Pitch', 'Yaw'], [(255, 150, 150), (150, 255, 150), (150, 150, 255)]),
-            ("Right Arm Position (m)", ['robot1'], ['X', 'Y', 'Z'], [(255, 100, 100), (100, 255, 100), (100, 100, 255)]),
-            ("Right Arm Rotation (deg)", ['right'], ['Roll', 'Pitch', 'Yaw'], [(255, 150, 150), (150, 255, 150), (150, 150, 255)]),
-            ("Gripper Width (m)", ['robot0', 'robot1'], ['Left', 'Right'], [(255, 100, 100), (100, 255, 100)])
+            ("Left Gripper Position (m)", ['robot0'], ['X', 'Y', 'Z'], [(255, 0, 0), (0, 255, 0), (0, 0, 255)]),
+            ("Left Gripper Rotation (deg)", ['left'], ['Roll', 'Pitch', 'Yaw'], [(255, 0, 0), (0, 255, 0), (0, 0, 255)]),
+            ("Right Gripper Position (m)", ['robot1'], ['X', 'Y', 'Z'], [(255, 0, 0), (0, 255, 0), (0, 0, 255)]),
+            ("Right Gripper Rotation (deg)", ['right'], ['Roll', 'Pitch', 'Yaw'], [(255, 0, 0), (0, 255, 0), (0, 0, 255)]),
+            ("Gripper Width (m)", ['robot0', 'robot1'], ['Left', 'Right'], [(255, 0, 0), (0, 255, 0)])
         ]
         
         for plot_name, robots, labels, colors in plots:
