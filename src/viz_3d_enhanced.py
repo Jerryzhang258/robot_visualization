@@ -27,6 +27,17 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         self._cached_controller_meshes = None
         self._cached_gripper_mesh_left = None
         self._cached_gripper_mesh_right = None
+        self._cached_controller_meshes = {}
+        self._show_raw_transforms = {0: False, 1: False}
+        self._show_controller_mesh = True
+        self._show_claw_finger_mesh = True
+        self._world_camera_node = None
+        self._world_light_nodes = []
+        self._camera_translation_mode = False
+        self._camera_yaw = 0.0
+        self._camera_pitch = 0.0
+        self._camera_distance = 0.6
+        self._camera_target = np.zeros(3, dtype=np.float64)
         super().__init__(*args, **kwargs)
 
     def setup_renderers(self):
@@ -35,7 +46,7 @@ class Enhanced3DVisualizer(CombinedVisualizer):
 
     def _init_world_scene_cache(self):
         """初始化并缓存世界场景、相机和静态网格"""
-        from viz_vb_data import (_axis_mesh, _lookat_camera_pose)
+        from viz_vb_data import (_axis_mesh, _quest_controller_mesh)
 
         scene = pyrender.Scene(bg_color=[0.05, 0.08, 0.12, 1.0])
 
@@ -57,45 +68,94 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         base.visual.vertex_colors = np.array([200, 200, 200, 255], dtype=np.uint8)
         self._cached_base_mesh = pyrender.Mesh.from_trimesh(base, smooth=False)
 
-        finger_path = 'src/meshes/finger.STL'
+        finger_path = 'src/meshes/gripper.STL'
+        # finger_path = 'src/meshes/finger.STL'
         assert os.path.exists(finger_path), f"缺少指尖网格文件: {finger_path}"
-        finger_mesh = trimesh.load(finger_path)
+        try:
+            finger_mesh = trimesh.load(finger_path)
+        except Exception as exc:
+            print(f"指尖网格加载失败，使用占位模型: {exc}")
+            finger_mesh = trimesh.creation.box(extents=[0.02, 0.01, 0.01])
         finger_mesh.apply_scale(0.001)
         finger_mesh.visual.vertex_colors = np.array([150, 150, 150, 255], dtype=np.uint8)
         self._cached_finger_mesh = pyrender.Mesh.from_trimesh(finger_mesh, smooth=True)
 
         # load gripper meshes
         left_system_path = 'src/meshes/left_system.STL'
-        # right_system_path = 'src/meshes/right_no_finger.STL'
+        right_system_path = 'src/meshes/left_no_finger.STL'
         assert os.path.exists(left_system_path), f"缺少夹爪网格文件: {left_system_path}"
-        # assert os.path.exists(right_system_path), f"缺少夹爪网格文件: {right_system_path}"
+        if not os.path.exists(right_system_path):
+            right_system_path = None
 
         left_gripper_mesh = trimesh.load(left_system_path)
         left_gripper_mesh.apply_scale(0.001)
         left_gripper_mesh.visual.vertex_colors = np.array([180, 180, 180, 255], dtype=np.uint8)
         self._cached_gripper_mesh_left = pyrender.Mesh.from_trimesh(left_gripper_mesh, smooth=True)
 
-        # right_gripper_mesh = trimesh.load(right_system_path)
-        # right_gripper_mesh.apply_scale(0.001)
-        # right_gripper_mesh.visual.vertex_colors = np.array([180, 180, 180, 255], dtype=np.uint8)
-        # self._cached_gripper_mesh_right = pyrender.Mesh.from_trimesh(right_gripper_mesh, smooth=True)
+        if right_system_path:
+            right_gripper_mesh = trimesh.load(right_system_path)
+            right_gripper_mesh.apply_scale(0.001)
+            mirror = np.eye(4)
+            mirror[1, 1] = -1
+            right_gripper_mesh.apply_transform(mirror)
+            right_gripper_mesh.visual.vertex_colors = np.array([180, 180, 180, 255], dtype=np.uint8)
+            self._cached_gripper_mesh_right = pyrender.Mesh.from_trimesh(right_gripper_mesh, smooth=True)
+        else:
+            self._cached_gripper_mesh_right = None
 
+        self._cached_controller_meshes = {
+            0: _quest_controller_mesh(is_left=False),
+            1: _quest_controller_mesh(is_left=True),
+        }
 
-        cam_pose = _lookat_camera_pose([0.15, -0.3, 0.4], [0, 0, 0], [0, 0, 1])
+        self._world_scene = scene
+        self._world_dynamic_nodes = []
+        self._reset_camera_controls()
+
+    def _reset_camera_controls(self):
+        default_eye = np.array([0.15, -0.3, 0.4], dtype=np.float64)
+        self._camera_target = np.zeros(3, dtype=np.float64)
+        direction = default_eye - self._camera_target
+        self._camera_distance = float(np.linalg.norm(direction))
+        if self._camera_distance < 1e-6:
+            self._camera_distance = 0.6
+            direction = np.array([0.15, -0.3, 0.4], dtype=np.float64)
+        self._camera_yaw = float(np.arctan2(direction[1], direction[0]))
+        self._camera_pitch = float(np.arcsin(direction[2] / self._camera_distance))
+        self._refresh_world_camera()
+
+    def _refresh_world_camera(self):
+        if self._world_scene is None:
+            return
+        from viz_vb_data import _lookat_camera_pose
+        if self._world_camera_node is not None:
+            self._world_scene.remove_node(self._world_camera_node)
+            self._world_camera_node = None
+        for node in self._world_light_nodes:
+            self._world_scene.remove_node(node)
+        self._world_light_nodes = []
+
+        max_pitch = np.deg2rad(89.0)
+        self._camera_pitch = float(np.clip(self._camera_pitch, -max_pitch, max_pitch))
+        dist = max(self._camera_distance, 0.05)
+        eye_offset = np.array([
+            dist * np.cos(self._camera_pitch) * np.cos(self._camera_yaw),
+            dist * np.cos(self._camera_pitch) * np.sin(self._camera_yaw),
+            dist * np.sin(self._camera_pitch),
+        ], dtype=np.float64)
+        eye = self._camera_target + eye_offset
+        cam_pose = _lookat_camera_pose(eye, self._camera_target, [0, 0, 1])
         self._world_camera_pose = cam_pose
         camera = pyrender.PerspectiveCamera(yfov=np.deg2rad(60.0))
-        scene.add(camera, pose=cam_pose)
+        self._world_camera_node = self._world_scene.add(camera, pose=cam_pose)
 
         main_light = pyrender.DirectionalLight(color=np.ones(3), intensity=5.0)
-        scene.add(main_light, pose=cam_pose)
+        self._world_light_nodes.append(self._world_scene.add(main_light, pose=cam_pose))
 
         fill_pose = cam_pose.copy()
         fill_pose[:3, 3] = -cam_pose[:3, 3]
         fill_light = pyrender.DirectionalLight(color=[0.8, 0.9, 1.0], intensity=2.0)
-        scene.add(fill_light, pose=fill_pose)
-
-        self._world_scene = scene
-        self._world_dynamic_nodes = []
+        self._world_light_nodes.append(self._world_scene.add(fill_light, pose=fill_pose))
     
     
     def _create_floor_grid_solid(self, size=2.0, step=0.2):
@@ -204,22 +264,34 @@ class Enhanced3DVisualizer(CombinedVisualizer):
 
             frame_pose = poses[current_idx]
             
-            if r == 0:
-                self._world_dynamic_nodes.append(scene.add(self._cached_gripper_mesh_left, pose=frame_pose))
+            if self._show_raw_transforms.get(r, False):
+                self._world_dynamic_nodes.append(scene.add(self._cached_axis_mesh, pose=frame_pose))
+
+            if self._show_controller_mesh:
+                gripper_mesh = self._cached_gripper_mesh_left if r == 0 else (self._cached_gripper_mesh_right or self._cached_gripper_mesh_left)
+                if gripper_mesh:
+                    self._world_dynamic_nodes.append(scene.add(gripper_mesh, pose=frame_pose))
+
+            if self._show_claw_finger_mesh:
+                gripper = self.data[prefix].get('gripper', [])
+                if gripper and current_idx < len(gripper):
+                    grip_width = float(gripper[current_idx])
+                    offset = grip_width / 2.0
+                    for sign in [-1, 1]:
+                        finger_tf = np.eye(4)
+                        finger_tf[:3, :3] = Rotation.from_euler('x', 90, degrees=True).as_matrix()
+                        finger_tf[:3, 3] = [0.05, sign * (offset - 0.01), -0.04]
+                        self._world_dynamic_nodes.append(scene.add(self._cached_finger_mesh, pose=frame_pose @ finger_tf))
             # else:
             #     self._world_dynamic_nodes.append(scene.add(self._cached_gripper_mesh_right, pose=frame_pose))
             
-            # TODO: finger orientation set @liuchaoyi @wangjiayu
-            # gripper = self.data[prefix].get('gripper', [])
-            # if gripper and current_idx < len(gripper):
-            #     grip_width = float(gripper[current_idx])
-            #     offset = grip_width / 2.0
-                
-                # for sign in [-1, 1]:
-                #     finger_tf = np.eye(4)
-                #     finger_tf[:3, :3] = Rotation.from_euler('x', 90, degrees=True).as_matrix()  
-                #     finger_tf[:3, 3] = [0.05, sign * (offset - 0.01), -0.04]
-                #     self._world_dynamic_nodes.append(scene.add(self._cached_finger_mesh, pose=frame_pose @ finger_tf))
+            if self._show_controller_mesh:
+                ctrl_mesh = self._cached_controller_meshes.get(r)
+                if ctrl_mesh:
+                    ctrl_tf = np.eye(4)
+                    ctrl_tf[:3, :3] = Rotation.from_euler('y', 90, degrees=True).as_matrix()
+                    ctrl_tf[:3, 3] = [0, 0, 0.03]
+                    self._world_dynamic_nodes.append(scene.add(ctrl_mesh, pose=frame_pose @ ctrl_tf))
 
         color_img, _ = self.renderers['world'].render(scene, flags=RenderFlags.RGBA)
         return color_img[:, :, :3]
@@ -495,7 +567,7 @@ class Enhanced3DVisualizer(CombinedVisualizer):
             cv2.putText(bar, label, (text_x, btn_y + 17), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, (220, 220, 220), 1, cv2.LINE_AA)
         
-        controls = "[A/D]Frame [W/S]Ep [P]Play [1-5]Speed [R]Reset [C]Shot [Q]Quit"
+        controls = "[A/D]Frame [W/S]Ep [P]Play [1-5]Speed [0]CamReset [T]CamMove [U/I]Raw [M]Ctrl [F]Claw [Q]Quit"
         cv2.putText(bar, controls, (20, 68), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (120, 120, 120), 1, cv2.LINE_AA)
         
@@ -540,8 +612,16 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         print("    [S]      上一个Episode")
         print("    [P]      自动播放（Episode结束后自动跳转下一个）")
         print("    [1-5]    速度: 0.25x, 0.5x, 1x, 2x, 5x")
-        print("    [R]      重置视角")
+        print("    [←/→]    相机水平旋转")
+        print("    [↑/↓]    相机俯仰旋转")
+        print("    [+/-]    相机缩放")
+        print("    [0]      相机重置")
+        print("    [T]      相机平移模式")
         print("    [C]      截图")
+        print("    [U]      显示Robot0原始变换")
+        print("    [I]      显示Robot1原始变换")
+        print("    [M]      显示夹爪网格")
+        print("    [F]      显示手指网格")
         print("    [Q]      退出")
         print("=" * 70 + "\n")
         
@@ -623,12 +703,56 @@ class Enhanced3DVisualizer(CombinedVisualizer):
             elif key == ord('3'): self.playback_speed = 1.0; print("速度: 1x")
             elif key == ord('4'): self.playback_speed = 2.0; print("速度: 2x")
             elif key == ord('5'): self.playback_speed = 5.0; print("速度: 5x")
-            elif key == ord('r'): self.setup_camera_params(); print("视角重置")
+            elif key in (ord('0'), ord(')')):
+                self._reset_camera_controls()
+                print("相机重置")
+            elif key in (82, 84, 81, 83):
+                step = 0.08
+                if self._camera_translation_mode:
+                    if key == 81:
+                        self._camera_target[0] -= step
+                    elif key == 83:
+                        self._camera_target[0] += step
+                    elif key == 82:
+                        self._camera_target[1] += step
+                    elif key == 84:
+                        self._camera_target[1] -= step
+                else:
+                    if key == 81:
+                        self._camera_yaw -= step
+                    elif key == 83:
+                        self._camera_yaw += step
+                    elif key == 82:
+                        self._camera_pitch += step
+                    elif key == 84:
+                        self._camera_pitch -= step
+                self._refresh_world_camera()
+            elif key in (ord('+'), ord('=')):
+                self._camera_distance = max(self._camera_distance * 0.9, 0.05)
+                self._refresh_world_camera()
+            elif key in (ord('-'), ord('_')):
+                self._camera_distance = self._camera_distance * 1.1
+                self._refresh_world_camera()
+            elif key == ord('t'):
+                self._camera_translation_mode = not self._camera_translation_mode
+                print(f"相机平移模式: {'开启' if self._camera_translation_mode else '关闭'}")
             elif key == ord('c'):
                 import datetime
                 filename = f"monitor_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
                 cv2.imwrite(filename, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
                 print(f"截图: {filename}")
+            elif key == ord('u'):
+                self._show_raw_transforms[0] = not self._show_raw_transforms[0]
+                print(f"Robot0原始变换: {'显示' if self._show_raw_transforms[0] else '隐藏'}")
+            elif key == ord('i'):
+                self._show_raw_transforms[1] = not self._show_raw_transforms[1]
+                print(f"Robot1原始变换: {'显示' if self._show_raw_transforms[1] else '隐藏'}")
+            elif key == ord('m'):
+                self._show_controller_mesh = not self._show_controller_mesh
+                print(f"夹爪网格: {'显示' if self._show_controller_mesh else '隐藏'}")
+            elif key == ord('f'):
+                self._show_claw_finger_mesh = not self._show_claw_finger_mesh
+                print(f"手指网格: {'显示' if self._show_claw_finger_mesh else '隐藏'}")
             elif key == ord('q'): 
                 print("\n退出\n")
                 break
