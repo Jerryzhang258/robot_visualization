@@ -29,3 +29,28 @@ build/
 
 # 其他
 *.log
+
+# 临时脚本
+add_*.py
+fix_*.py
+complete_*.py
+ensure_*.py
+final_*.py
+layout_*.py
+maximize_*.py
+one_*.py
+replace_*.py
+simple_*.py
+adjust_*.py
+diagnose_*.py
+analyze_*.py
+debug_*.py
+
+# 备份文件
+*.backup
+*.backup2
+
+# 导出目录
+curves_export/
+test_export/
+my_curves/
