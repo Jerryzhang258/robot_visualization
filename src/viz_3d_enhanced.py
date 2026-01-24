@@ -1,4 +1,6 @@
 import cv2
+from PIL import Image, ImageDraw, ImageFont
+import platform
 import numpy as np
 import time
 from viz_vb_data import (CombinedVisualizer, ROBOT_IDS, resize_with_label, 
@@ -297,7 +299,7 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         panel[:] = [25, 30, 40]
         
         cv2.rectangle(panel, (0, 0), (w, 40), (15, 20, 30), -1)
-        cv2.putText(panel, "Real-time Trajectories", (15, 28), 
+        cv2.putText(panel, "实时轨迹", (15, 28), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (220, 220, 220), 1, cv2.LINE_AA)
         
         y_offset = 50
@@ -452,7 +454,7 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         """创建完整布局"""
         header = self._create_header(frame_idx)
         camera_row = self._create_camera_row(frame_idx)
-        world_panel = self._add_panel_frame(world_image if world_image is not None else np.zeros((700, 900, 3), dtype=np.uint8), "3D World View", (100, 200, 255))
+        world_panel = self._add_panel_frame(world_image if world_image is not None else np.zeros((700, 900, 3), dtype=np.uint8), "3D世界视图", (100, 200, 255))
         plots_panel = self._create_trajectory_plots(frame_idx)
         
         h = max(world_panel.shape[0], plots_panel.shape[0])
@@ -471,8 +473,12 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         header = np.zeros((h, w, 3), dtype=np.uint8)
         header[:] = [20, 25, 35]
         
-        cv2.putText(header, "Robot Monitor", (20, 38), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
+        # 中文标题
+        im = Image.fromarray(cv2.cvtColor(header, cv2.COLOR_BGR2RGB))
+        dr = ImageDraw.Draw(im)
+        ft = ImageFont.truetype("/System/Library/Fonts/Hiragino Sans GB.ttc", 24)
+        dr.text((20, 38), "机器人监控", font=ft, fill=(255, 255, 255))
+        header = cv2.cvtColor(np.array(im), cv2.COLOR_RGB2BGR)
         
         cv2.circle(header, (250, 30), 6, (100, 255, 100), -1)
         cv2.putText(header, f"Speed: {self.playback_speed}x", (270, 38), 
