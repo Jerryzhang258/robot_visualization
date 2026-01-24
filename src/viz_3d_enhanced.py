@@ -23,7 +23,7 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         self._cached_axis_mesh = None
         self._cached_wrist_mesh = None
         self._cached_base_mesh = None
-        self._cached_sensor_mesh = None
+        self._cached_finger_mesh = None
         self._cached_controller_meshes = None
         self._cached_gripper_mesh_left = None
         self._cached_gripper_mesh_right = None
@@ -57,15 +57,15 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         base.visual.vertex_colors = np.array([200, 200, 200, 255], dtype=np.uint8)
         self._cached_base_mesh = pyrender.Mesh.from_trimesh(base, smooth=False)
 
-        sensor_path = 'src/meshes/sensor.STL'
-        assert os.path.exists(sensor_path), f"缺少传感器网格文件: {sensor_path}"
-        sensor_mesh = trimesh.load(sensor_path)
-        sensor_mesh.apply_scale(0.001)
-        sensor_mesh.visual.vertex_colors = np.array([150, 150, 150, 255], dtype=np.uint8)
-        self._cached_sensor_mesh = pyrender.Mesh.from_trimesh(sensor_mesh, smooth=True)
+        finger_path = 'src/meshes/finger.STL'
+        assert os.path.exists(finger_path), f"缺少指尖网格文件: {finger_path}"
+        finger_mesh = trimesh.load(finger_path)
+        finger_mesh.apply_scale(0.001)
+        finger_mesh.visual.vertex_colors = np.array([150, 150, 150, 255], dtype=np.uint8)
+        self._cached_finger_mesh = pyrender.Mesh.from_trimesh(finger_mesh, smooth=True)
 
         # load gripper meshes
-        left_system_path = 'src/meshes/left_no_finger.STL'
+        left_system_path = 'src/meshes/left_system.STL'
         # right_system_path = 'src/meshes/right_no_finger.STL'
         assert os.path.exists(left_system_path), f"缺少夹爪网格文件: {left_system_path}"
         # assert os.path.exists(right_system_path), f"缺少夹爪网格文件: {right_system_path}"
@@ -209,16 +209,17 @@ class Enhanced3DVisualizer(CombinedVisualizer):
             # else:
             #     self._world_dynamic_nodes.append(scene.add(self._cached_gripper_mesh_right, pose=frame_pose))
             
-            gripper = self.data[prefix].get('gripper', [])
-            if gripper and current_idx < len(gripper):
-                grip_width = float(gripper[current_idx])
-                offset = max(grip_width * 0.5, 0.03)  # TODO: check @liuchaoyi
+            # TODO: finger orientation set @liuchaoyi @wangjiayu
+            # gripper = self.data[prefix].get('gripper', [])
+            # if gripper and current_idx < len(gripper):
+            #     grip_width = float(gripper[current_idx])
+            #     offset = grip_width / 2.0
                 
-                for sign in [-1, 1]:
-                    sensor_tf = np.eye(4)
-                    sensor_tf[:3, :3] = Rotation.from_euler('x', 90, degrees=True).as_matrix()  # TODO: sensor orientation check
-                    sensor_tf[:3, 3] = [0.05, sign * (offset - 0.01), -0.04]
-                    self._world_dynamic_nodes.append(scene.add(self._cached_sensor_mesh, pose=frame_pose @ sensor_tf))
+                # for sign in [-1, 1]:
+                #     finger_tf = np.eye(4)
+                #     finger_tf[:3, :3] = Rotation.from_euler('x', 90, degrees=True).as_matrix()  
+                #     finger_tf[:3, 3] = [0.05, sign * (offset - 0.01), -0.04]
+                #     self._world_dynamic_nodes.append(scene.add(self._cached_finger_mesh, pose=frame_pose @ finger_tf))
 
         color_img, _ = self.renderers['world'].render(scene, flags=RenderFlags.RGBA)
         return color_img[:, :, :3]
