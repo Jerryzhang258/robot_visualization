@@ -1,0 +1,93 @@
+{
+  "no_finger_path": "src/meshes/left_no_finger.STL",
+  "left_finger_path": "src/meshes/left_finger.STL",
+  "right_finger_path": "src/meshes/right_finger.STL",
+  "samples": 6000,
+  "icp_iters": 100,
+  "residual_thresh": 0.5,
+  "split_axis": "y",
+  "split_value": 0.0,
+  "transform_no_finger_to_quest": [
+    [
+      1.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      1.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      1.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "transform_left_finger_to_no_finger": [
+    [
+      0.29971913,
+      -0.75692349,
+      -0.58071999,
+      -115.98279746464593
+    ],
+    [
+      -0.82959868,
+      0.0937964,
+      -0.5504257,
+      91.93755513486322
+    ],
+    [
+      0.47109929,
+      0.64673812,
+      -0.59983051,
+      -45.049809743599866
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "transform_right_finger_to_no_finger": [
+    [
+      0.0632646,
+      -0.75692349,
+      -0.65043392,
+      90.64479718820762
+    ],
+    [
+      -0.97448006,
+      0.0937964,
+      -0.20393556,
+      36.45645432084549
+    ],
+    [
+      0.21537157,
+      0.64673812,
+      -0.73167308,
+      4.2108125991936305
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "tip_axis": "z",
+  "symmetric": false,
+  "nudge": false,
+  "gripper_type": "left_hand",
+  "outputs": {}
+}

@@ -15,16 +15,27 @@ import trimesh
 
 
 def _load_calibration(json_path):
-    """Load calibration data from JSON file."""
+    """Load calibration data from JSON file.
+    
+    Supports both symmetric (single finger mesh) and separate (left/right meshes) formats.
+    """
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
     
-    # Get transforms (prefer the to_no_finger versions if available)
-    if "transform_finger_left_to_no_finger" in data:
+    # Get transforms - support multiple naming conventions
+    t_left = None
+    t_right = None
+    
+    # New format: separate left/right finger transforms
+    if "transform_left_finger_to_no_finger" in data:
+        t_left = np.array(data["transform_left_finger_to_no_finger"], dtype=np.float64)
+        t_right = np.array(data["transform_right_finger_to_no_finger"], dtype=np.float64)
+    # Old format: symmetric finger transforms
+    elif "transform_finger_left_to_no_finger" in data:
         t_left = np.array(data["transform_finger_left_to_no_finger"], dtype=np.float64)
         t_right = np.array(data["transform_finger_right_to_no_finger"], dtype=np.float64)
-    else:
-        # Fall back to computing from assem-frame transforms
+    # Legacy format: compute from assem-frame transforms
+    elif "transform_no_finger_to_assem" in data:
         t_nf_to_assem = np.array(data["transform_no_finger_to_assem"], dtype=np.float64)
         t_left_assem = np.array(data["transform_finger_left"], dtype=np.float64)
         t_right_assem = np.array(data["transform_finger_right"], dtype=np.float64)
@@ -32,12 +43,18 @@ def _load_calibration(json_path):
         t_left = t_nf_to_assem_inv @ t_left_assem
         t_right = t_nf_to_assem_inv @ t_right_assem
     
+    if t_left is None or t_right is None:
+        raise ValueError("Could not find finger transforms in calibration file")
+    
     # Get center/base transform if available
     t_center = None
     if "transform_finger_base_to_no_finger" in data:
         t_center = np.array(data["transform_finger_base_to_no_finger"], dtype=np.float64)
     
-    return data, t_left, t_right, t_center
+    # Check if this is separate finger calibration
+    has_separate_meshes = "left_finger_path" in data and "right_finger_path" in data
+    
+    return data, t_left, t_right, t_center, has_separate_meshes
 
 
 def _colorize(mesh, rgba):
@@ -142,7 +159,7 @@ Examples:
     
     # Load calibration
     try:
-        data, t_left, t_right, t_center = _load_calibration(args.json)
+        data, t_left, t_right, t_center, has_separate_meshes = _load_calibration(args.json)
     except Exception as e:
         print(f"❌ Failed to load calibration: {e}")
         sys.exit(1)
@@ -151,26 +168,59 @@ Examples:
     print(f"\n  Calibration metadata:")
     print(f"    tip_axis: {data.get('tip_axis', 'z')}")
     print(f"    symmetric: {data.get('symmetric', True)}")
+    print(f"    separate_meshes: {has_separate_meshes}")
     print(f"    samples: {data.get('samples', 'N/A')}")
     print(f"    residual_thresh: {data.get('residual_thresh', 'N/A')}")
+    if "alignment_scores" in data:
+        scores = data["alignment_scores"]
+        print(f"    alignment_scores:")
+        print(f"      left:  {scores.get('left_finger', 'N/A')} mm")
+        print(f"      right: {scores.get('right_finger', 'N/A')} mm")
+        print(f"      avg:   {scores.get('average', 'N/A')} mm")
     
-    # Load meshes
+    # Load meshes - handle both separate and single finger formats
     no_finger_path = data.get("no_finger_path")
-    finger_path = data.get("finger_path")
     assem_path = data.get("assem_path")
     
     if not no_finger_path or not os.path.exists(no_finger_path):
         print(f"❌ no_finger mesh not found: {no_finger_path}")
         sys.exit(1)
-    if not finger_path or not os.path.exists(finger_path):
-        print(f"❌ finger mesh not found: {finger_path}")
-        sys.exit(1)
     
     print(f"\n  Loading meshes...")
     no_finger = trimesh.load(no_finger_path)
-    finger = trimesh.load(finger_path)
     print(f"    ✓ no_finger: {len(no_finger.vertices)} vertices")
-    print(f"    ✓ finger: {len(finger.vertices)} vertices")
+    
+    # Load finger meshes (separate or single)
+    left_finger = None
+    right_finger = None
+    
+    if has_separate_meshes:
+        # Load separate left and right finger meshes
+        left_finger_path = data.get("left_finger_path")
+        right_finger_path = data.get("right_finger_path")
+        
+        if not left_finger_path or not os.path.exists(left_finger_path):
+            print(f"❌ left_finger mesh not found: {left_finger_path}")
+            sys.exit(1)
+        if not right_finger_path or not os.path.exists(right_finger_path):
+            print(f"❌ right_finger mesh not found: {right_finger_path}")
+            sys.exit(1)
+        
+        left_finger = trimesh.load(left_finger_path)
+        right_finger = trimesh.load(right_finger_path)
+        print(f"    ✓ left_finger: {len(left_finger.vertices)} vertices")
+        print(f"    ✓ right_finger: {len(right_finger.vertices)} vertices")
+    else:
+        # Load single symmetric finger mesh
+        finger_path = data.get("finger_path")
+        if not finger_path or not os.path.exists(finger_path):
+            print(f"❌ finger mesh not found: {finger_path}")
+            sys.exit(1)
+        
+        finger = trimesh.load(finger_path)
+        left_finger = finger.copy()
+        right_finger = finger.copy()
+        print(f"    ✓ finger: {len(finger.vertices)} vertices (used for both sides)")
     
     assem = None
     if args.show_assem and assem_path and os.path.exists(assem_path):
@@ -181,7 +231,8 @@ Examples:
     if args.scale != 1.0:
         print(f"\n  Applying scale factor: {args.scale}")
         no_finger.apply_scale(args.scale)
-        finger.apply_scale(args.scale)
+        left_finger.apply_scale(args.scale)
+        right_finger.apply_scale(args.scale)
         if assem:
             assem.apply_scale(args.scale)
         t_left = _scale_transform(t_left, args.scale)
@@ -190,9 +241,9 @@ Examples:
             t_center = _scale_transform(t_center, args.scale)
     
     # Create transformed finger meshes
-    left_mesh = finger.copy()
+    left_mesh = left_finger.copy()
     left_mesh.apply_transform(t_left)
-    right_mesh = finger.copy()
+    right_mesh = right_finger.copy()
     right_mesh.apply_transform(t_right)
     
     # Build scene

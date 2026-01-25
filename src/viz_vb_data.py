@@ -510,7 +510,7 @@ def _load_finger_calibration(calibration_path=None):
     
     Returns:
         Calibration dict with keys: left_to_no_finger, right_to_no_finger, 
-        center_to_no_finger, open_axis_no_finger, tip_axis
+        center_to_no_finger, open_axis_no_finger, tip_axis, left_finger_mesh, right_finger_mesh
     """
     path = calibration_path if calibration_path else FINGER_CALIBRATION_JSON
     if not os.path.exists(path):
@@ -519,16 +519,25 @@ def _load_finger_calibration(calibration_path=None):
         data = json.load(f)
 
     tip_axis = data.get("tip_axis", "z")
-    if "transform_finger_left_to_no_finger" in data:
+    
+    # Load transforms based on new or old JSON format
+    if "transform_left_finger_to_no_finger" in data:
+        # New format with separate left/right finger transforms
+        t_left = np.array(data["transform_left_finger_to_no_finger"], dtype=np.float64)
+        t_right = np.array(data["transform_right_finger_to_no_finger"], dtype=np.float64)
+    elif "transform_finger_left_to_no_finger" in data:
+        # Old format
         t_left = np.array(data["transform_finger_left_to_no_finger"], dtype=np.float64)
         t_right = np.array(data["transform_finger_right_to_no_finger"], dtype=np.float64)
     else:
+        # Legacy format
         t_nf_to_assem = np.array(data["transform_no_finger_to_assem"], dtype=np.float64)
         t_left_assem = np.array(data["transform_finger_left"], dtype=np.float64)
         t_right_assem = np.array(data["transform_finger_right"], dtype=np.float64)
         t_nf_to_assem_inv = np.linalg.inv(t_nf_to_assem)
         t_left = t_nf_to_assem_inv @ t_left_assem
         t_right = t_nf_to_assem_inv @ t_right_assem
+    
     t_center = _compute_center_pose(t_left, t_right, tip_axis=tip_axis)
 
     t_left = _scale_transform(t_left, FINGER_CALIBRATION_SCALE)
@@ -545,12 +554,37 @@ def _load_finger_calibration(calibration_path=None):
     else:
         axis = delta / norm
 
+    # Load finger meshes (new format with separate paths)
+    left_finger_mesh = None
+    right_finger_mesh = None
+    if "left_finger_path" in data and "right_finger_path" in data:
+        left_finger_path = data["left_finger_path"]
+        right_finger_path = data["right_finger_path"]
+        
+        if os.path.exists(left_finger_path):
+            try:
+                left_finger_mesh = trimesh.load(left_finger_path)
+                left_finger_mesh.apply_scale(FINGER_CALIBRATION_SCALE)
+                left_finger_mesh.visual.vertex_colors = np.array([150, 150, 150, 255], dtype=np.uint8)
+            except Exception as e:
+                print(f"Warning: Failed to load left finger mesh from {left_finger_path}: {e}")
+        
+        if os.path.exists(right_finger_path):
+            try:
+                right_finger_mesh = trimesh.load(right_finger_path)
+                right_finger_mesh.apply_scale(FINGER_CALIBRATION_SCALE)
+                right_finger_mesh.visual.vertex_colors = np.array([150, 150, 150, 255], dtype=np.uint8)
+            except Exception as e:
+                print(f"Warning: Failed to load right finger mesh from {right_finger_path}: {e}")
+
     return {
         "left_to_no_finger": t_left,
         "right_to_no_finger": t_right,
         "center_to_no_finger": t_center,
         "open_axis_no_finger": axis,
         "tip_axis": tip_axis,
+        "left_finger_mesh": left_finger_mesh,
+        "right_finger_mesh": right_finger_mesh,
     }
 
 

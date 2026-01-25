@@ -143,7 +143,9 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         self._cached_axis_mesh = None
         self._cached_wrist_mesh = None
         self._cached_base_mesh = None
-        self._cached_finger_mesh = None
+        self._cached_finger_mesh = None  # Legacy single mesh
+        self._cached_left_finger_mesh = None  # Separate left finger mesh
+        self._cached_right_finger_mesh = None  # Separate right finger mesh
         self._cached_controller_meshes = None
         self._cached_gripper_mesh_left = None
         self._cached_gripper_mesh_right = None
@@ -320,18 +322,40 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         base.visual.vertex_colors = np.array([200, 200, 200, 255], dtype=np.uint8)
         self._cached_base_mesh = pyrender.Mesh.from_trimesh(base, smooth=False)
 
+        # Legacy single finger mesh (fallback)
         finger_path = 'src/meshes/finger.STL'
         if not os.path.exists(finger_path):
             finger_path = 'src/meshes/gripper.STL'
-        assert os.path.exists(finger_path), f"缺少指尖网格文件: {finger_path}"
-        try:
-            finger_mesh = trimesh.load(finger_path)
-        except Exception as exc:
-            print(f"指尖网格加载失败，使用占位模型: {exc}")
-            finger_mesh = trimesh.creation.box(extents=[0.02, 0.01, 0.01])
-        finger_mesh.apply_scale(0.001)
-        finger_mesh.visual.vertex_colors = np.array([150, 150, 150, 255], dtype=np.uint8)
-        self._cached_finger_mesh = pyrender.Mesh.from_trimesh(finger_mesh, smooth=True)
+        if os.path.exists(finger_path):
+            try:
+                finger_mesh = trimesh.load(finger_path)
+                finger_mesh.apply_scale(0.001)
+                finger_mesh.visual.vertex_colors = np.array([150, 150, 150, 255], dtype=np.uint8)
+                self._cached_finger_mesh = pyrender.Mesh.from_trimesh(finger_mesh, smooth=True)
+            except Exception as exc:
+                print(f"指尖网格加载失败: {exc}")
+                self._cached_finger_mesh = None
+        
+        # Load separate left/right finger meshes from calibration if available
+        self._cached_left_finger_mesh = None
+        self._cached_right_finger_mesh = None
+        
+        # Try to load from robot-specific calibrations
+        from viz_vb_data import _load_finger_calibrations_per_robot
+        calib_per_robot = _load_finger_calibrations_per_robot()
+        
+        if calib_per_robot:
+            # Use robot 0 (left gripper) meshes
+            left_calib = calib_per_robot.get(0)
+            if left_calib:
+                if left_calib.get("left_finger_mesh") is not None:
+                    self._cached_left_finger_mesh = pyrender.Mesh.from_trimesh(
+                        left_calib["left_finger_mesh"], smooth=True
+                    )
+                if left_calib.get("right_finger_mesh") is not None:
+                    self._cached_right_finger_mesh = pyrender.Mesh.from_trimesh(
+                        left_calib["right_finger_mesh"], smooth=True
+                    )
 
         # load gripper meshes
         left_system_path = 'src/meshes/left_no_finger.STL'
@@ -541,8 +565,14 @@ class Enhanced3DVisualizer(CombinedVisualizer):
                     right_pose[:3, 3] = [0.05, (offset - 0.01), -0.04]
 
                 if self._show_claw_finger_mesh:
-                    self._world_dynamic_nodes.append(scene.add(self._cached_finger_mesh, pose=frame_pose @ left_pose))
-                    self._world_dynamic_nodes.append(scene.add(self._cached_finger_mesh, pose=frame_pose @ right_pose))
+                    # Use separate left/right finger meshes if available
+                    if self._cached_left_finger_mesh is not None and self._cached_right_finger_mesh is not None:
+                        self._world_dynamic_nodes.append(scene.add(self._cached_left_finger_mesh, pose=frame_pose @ left_pose))
+                        self._world_dynamic_nodes.append(scene.add(self._cached_right_finger_mesh, pose=frame_pose @ right_pose))
+                    elif self._cached_finger_mesh is not None:
+                        # Fallback to legacy single mesh
+                        self._world_dynamic_nodes.append(scene.add(self._cached_finger_mesh, pose=frame_pose @ left_pose))
+                        self._world_dynamic_nodes.append(scene.add(self._cached_finger_mesh, pose=frame_pose @ right_pose))
 
                 if self._show_finger_axes:
                     axis_mesh = self._cached_axis_mesh or _axis_mesh(size=0.05)
