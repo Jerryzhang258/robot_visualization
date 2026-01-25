@@ -11,7 +11,127 @@ from scipy.spatial.transform import Rotation
 import os
 
 class Enhanced3DVisualizer(CombinedVisualizer):
-    """3D增强可视化器"""
+    """3D增强可视化器 / Enhanced 3D Visualizer"""
+    
+    # Language dictionary for bilingual support
+    LANG = {
+        'zh': {
+            'window_title': '机器人监控',
+            'platform': '平台',
+            'arrow_keys': '方向键',
+            'controls': '控制',
+            'frame_nav': '前后帧',
+            'next_episode': '下一个Episode',
+            'prev_episode': '上一个Episode',
+            'auto_play': '自动播放（Episode结束后自动跳转下一个）',
+            'speed': '速度',
+            'cam_rotate_h': '相机水平旋转',
+            'cam_rotate_v': '相机俯仰旋转',
+            'cam_zoom': '相机缩放',
+            'cam_z_translate': '相机Z轴平移（需先按T）',
+            'cam_reset': '相机重置',
+            'cam_translate_mode': '相机平移模式',
+            'screenshot': '截图',
+            'show_raw_transform': '显示Robot{0}原始变换',
+            'show_gripper_mesh': '显示夹爪网格',
+            'show_finger_mesh': '显示手指网格',
+            'show_finger_axes': '显示手指坐标轴',
+            'switch_language': '切换语言 (中/En)',
+            'quit': '退出',
+            'ep_complete': 'Episode {0} 完成，自动加载下一个...',
+            'play_complete': '播放完成',
+            'jump_to_ep': '跳转到 Episode {0}',
+            'last_episode': '已经是最后一个Episode',
+            'first_episode': '已经是第一个Episode',
+            'auto_play_on': '自动播放: 开启',
+            'auto_play_off': '自动播放: 关闭',
+            'cam_reset_msg': '相机重置',
+            'cam_target_z': '相机目标Z: {0:.3f}',
+            'cam_translate_on': '相机平移模式: 开启',
+            'cam_translate_off': '相机平移模式: 关闭',
+            'screenshot_saved': '截图: {0}',
+            'raw_transform_show': 'Robot{0}原始变换: 显示',
+            'raw_transform_hide': 'Robot{0}原始变换: 隐藏',
+            'gripper_mesh_show': '夹爪网格: 显示',
+            'gripper_mesh_hide': '夹爪网格: 隐藏',
+            'finger_mesh_show': '手指网格: 显示',
+            'finger_mesh_hide': '手指网格: 隐藏',
+            'finger_axes_show': '手指坐标轴: 显示',
+            'finger_axes_hide': '手指坐标轴: 隐藏',
+            'exiting': '退出',
+            'realtime_trajectory': '实时轨迹',
+            '3d_world_view': '3D世界视图',
+            'language_switched': '语言已切换: 中文',
+            # Panel text labels
+            'robot_0_position': 'Robot 0 位置 (m)',
+            'robot_1_position': 'Robot 1 位置 (m)',
+            'gripper_width': '夹爪宽度 (m)',
+            'robot': '机器人',
+            'visual': '视觉',
+            'left_tactile': '左触觉',
+            'right_tactile': '右触觉',
+            'ep': '回合',
+            'frame': '帧',
+        },
+        'en': {
+            'window_title': 'Robot Monitor',
+            'platform': 'Platform',
+            'arrow_keys': 'Arrow Keys',
+            'controls': 'Controls',
+            'frame_nav': 'Frame Navigation',
+            'next_episode': 'Next Episode',
+            'prev_episode': 'Previous Episode',
+            'auto_play': 'Auto Play (auto next episode)',
+            'speed': 'Speed',
+            'cam_rotate_h': 'Camera Rotate Horizontal',
+            'cam_rotate_v': 'Camera Rotate Vertical',
+            'cam_zoom': 'Camera Zoom',
+            'cam_z_translate': 'Camera Z-axis Translation (T mode)',
+            'cam_reset': 'Camera Reset',
+            'cam_translate_mode': 'Camera Translation Mode',
+            'screenshot': 'Screenshot',
+            'show_raw_transform': 'Show Robot{0} Raw Transform',
+            'show_gripper_mesh': 'Show Gripper Mesh',
+            'show_finger_mesh': 'Show Finger Mesh',
+            'show_finger_axes': 'Show Finger Axes',
+            'switch_language': 'Switch Language (中/En)',
+            'quit': 'Quit',
+            'ep_complete': 'Episode {0} complete, loading next...',
+            'play_complete': 'Playback complete',
+            'jump_to_ep': 'Jump to Episode {0}',
+            'last_episode': 'Already at last episode',
+            'first_episode': 'Already at first episode',
+            'auto_play_on': 'Auto Play: ON',
+            'auto_play_off': 'Auto Play: OFF',
+            'cam_reset_msg': 'Camera Reset',
+            'cam_target_z': 'Camera Target Z: {0:.3f}',
+            'cam_translate_on': 'Camera Translation Mode: ON',
+            'cam_translate_off': 'Camera Translation Mode: OFF',
+            'screenshot_saved': 'Screenshot: {0}',
+            'raw_transform_show': 'Robot{0} Raw Transform: SHOW',
+            'raw_transform_hide': 'Robot{0} Raw Transform: HIDE',
+            'gripper_mesh_show': 'Gripper Mesh: SHOW',
+            'gripper_mesh_hide': 'Gripper Mesh: HIDE',
+            'finger_mesh_show': 'Finger Mesh: SHOW',
+            'finger_mesh_hide': 'Finger Mesh: HIDE',
+            'finger_axes_show': 'Finger Axes: SHOW',
+            'finger_axes_hide': 'Finger Axes: HIDE',
+            'exiting': 'Exiting',
+            'realtime_trajectory': 'Real-time Trajectory',
+            '3d_world_view': '3D World View',
+            'language_switched': 'Language switched: English',
+            # Panel text labels
+            'robot_0_position': 'Robot 0 Position (m)',
+            'robot_1_position': 'Robot 1 Position (m)',
+            'gripper_width': 'Gripper Width (m)',
+            'robot': 'Robot',
+            'visual': 'Visual',
+            'left_tactile': 'L-Tact',
+            'right_tactile': 'R-Tact',
+            'ep': 'Ep',
+            'frame': 'Frame',
+        }
+    }
     
     def __init__(self, *args, **kwargs):
         self.window_name = "Robot Monitor"
@@ -39,7 +159,138 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         self._camera_pitch = 0.0
         self._camera_distance = 0.6
         self._camera_target = np.zeros(3, dtype=np.float64)
+        
+        # Language settings (default: Chinese)
+        self._language = 'zh'
+        
+        # Cross-platform arrow key codes
+        # OpenCV returns different codes on Windows vs Linux
+        self._setup_arrow_key_codes()
+        
         super().__init__(*args, **kwargs)
+    
+    def _t(self, key):
+        """Translate text based on current language"""
+        return self.LANG[self._language].get(key, key)
+    
+    def _safe_print(self, text):
+        """Print text safely, handling encoding issues on different platforms"""
+        try:
+            print(text)
+        except UnicodeEncodeError:
+            # Fallback to ASCII-safe output if terminal doesn't support Unicode
+            print(text.encode('ascii', 'replace').decode('ascii'))
+    
+    def _put_text_unicode(self, img, text, position, font_size=20, color=(255, 255, 255), font_path=None):
+        """
+        Put Unicode text (including Chinese) on OpenCV image using PIL
+        
+        Args:
+            img: OpenCV image (BGR format)
+            text: Text to display (can contain Chinese characters)
+            position: (x, y) tuple for text position
+            font_size: Font size in pixels
+            color: Text color in BGR format (default white)
+            font_path: Path to TrueType font file (optional)
+        
+        Returns:
+            Modified image
+        """
+        # Convert OpenCV BGR to PIL RGB
+        img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+        draw = ImageDraw.Draw(img_pil)
+        
+        # Try to load a font that supports Chinese
+        try:
+            if font_path and os.path.exists(font_path):
+                font = ImageFont.truetype(font_path, font_size)
+            else:
+                # Try common Chinese fonts on different platforms
+                font_candidates = [
+                    # Linux
+                    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+                    "/usr/share/fonts/truetype/arphic/uming.ttc",
+                    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                    # macOS
+                    "/System/Library/Fonts/PingFang.ttc",
+                    "/System/Library/Fonts/STHeiti Light.ttc",
+                    # Windows (if running under WSL or Wine)
+                    "C:/Windows/Fonts/msyh.ttc",
+                    "C:/Windows/Fonts/simhei.ttf",
+                ]
+                
+                font = None
+                for font_candidate in font_candidates:
+                    if os.path.exists(font_candidate):
+                        font = ImageFont.truetype(font_candidate, font_size)
+                        break
+                
+                if font is None:
+                    # Fallback to default font (doesn't support Chinese well)
+                    font = ImageFont.load_default()
+        except Exception as e:
+            # If all fails, use default font
+            font = ImageFont.load_default()
+        
+        # Draw text
+        draw.text(position, text, font=font, fill=color[::-1])  # BGR to RGB
+        
+        # Convert back to OpenCV BGR
+        return cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+    
+    def _switch_language(self):
+        """Toggle between Chinese and English"""
+        self._language = 'en' if self._language == 'zh' else 'zh'
+        self._safe_print(self._t('language_switched'))
+        # Re-display controls in new language
+        self._display_startup_info()
+    
+    def _display_startup_info(self):
+        """Display startup information with current language"""
+        system = platform.system()
+        self._safe_print("\n" + "=" * 70)
+        self._safe_print(f"  {self._t('window_title')}")
+        self._safe_print("=" * 70)
+        self._safe_print(f"  {self._t('platform')}: {system}")
+        self._safe_print(f"  {self._t('arrow_keys')}: Left={self.KEY_LEFT}, Up={self.KEY_UP}, Right={self.KEY_RIGHT}, Down={self.KEY_DOWN}")
+        self._safe_print(f"  {self._t('controls')}:")
+        self._safe_print(f"    [A/D]    {self._t('frame_nav')}")
+        self._safe_print(f"    [W]      {self._t('next_episode')}")
+        self._safe_print(f"    [S]      {self._t('prev_episode')}")
+        self._safe_print(f"    [P]      {self._t('auto_play')}")
+        self._safe_print(f"    [1-5]    {self._t('speed')}: 0.25x, 0.5x, 1x, 2x, 5x")
+        self._safe_print(f"    [←/→]    {self._t('cam_rotate_h')}")
+        self._safe_print(f"    [↑/↓]    {self._t('cam_rotate_v')}")
+        self._safe_print(f"    [+/-]    {self._t('cam_zoom')}")
+        self._safe_print(f"    [./]     {self._t('cam_z_translate')}")
+        self._safe_print(f"    [0]      {self._t('cam_reset')}")
+        self._safe_print(f"    [T]      {self._t('cam_translate_mode')}")
+        self._safe_print(f"    [L]      {self._t('switch_language')}")
+        self._safe_print(f"    [C]      {self._t('screenshot')}")
+        self._safe_print(f"    [U]      {self._t('show_raw_transform').format(0)}")
+        self._safe_print(f"    [I]      {self._t('show_raw_transform').format(1)}")
+        self._safe_print(f"    [M]      {self._t('show_gripper_mesh')}")
+        self._safe_print(f"    [F]      {self._t('show_finger_mesh')}")
+        self._safe_print(f"    [G]      {self._t('show_finger_axes')}")
+        self._safe_print(f"    [Q]      {self._t('quit')}")
+        self._safe_print("=" * 70 + "\n")
+    
+    def _setup_arrow_key_codes(self):
+        """Setup arrow key codes for cross-platform compatibility"""
+        system = platform.system()
+        
+        if system == 'Windows':
+            # Windows arrow key codes (extended keys)
+            self.KEY_LEFT = 2424832    # 0x250000
+            self.KEY_UP = 2490368      # 0x260000
+            self.KEY_RIGHT = 2555904   # 0x270000
+            self.KEY_DOWN = 2621440    # 0x280000
+        else:
+            # Linux/macOS arrow key codes
+            self.KEY_LEFT = 81
+            self.KEY_UP = 82
+            self.KEY_RIGHT = 83
+            self.KEY_DOWN = 84
 
     def setup_renderers(self):
         super().setup_renderers()
@@ -319,8 +570,15 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         panel[:] = [25, 30, 40]
         
         cv2.rectangle(panel, (0, 0), (w, 40), (15, 20, 30), -1)
-        cv2.putText(panel, "实时轨迹", (15, 28), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (220, 220, 220), 1, cv2.LINE_AA)
+        # Use Unicode-safe text rendering for Chinese
+        panel = self._put_text_unicode(
+            cv2.cvtColor(panel, cv2.COLOR_RGB2BGR),
+            self._t('realtime_trajectory'),
+            (15, 5),
+            font_size=18,
+            color=(220, 220, 220, 220)
+        )
+        panel = cv2.cvtColor(panel, cv2.COLOR_BGR2RGB)
         
         y_offset = 50
         plot_h = 110
@@ -330,14 +588,22 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         max_frames = len(self.data['robot0']['poses'])
         
         plots = [
-            ("Robot 0 Position (m)", ['robot0'], ['X', 'Y', 'Z'], [(255, 10, 10), (10, 255, 10), (10, 10, 255)]),
-            ("Robot 1 Position (m)", ['robot1'], ['X', 'Y', 'Z'], [(255, 10, 10), (10, 255, 10), (10, 10, 255)]),
-            ("Gripper Width (m)", ['robot0', 'robot1'], ['R0', 'R1'], [(255, 100, 100), (100, 255, 100)])
+            (self._t('robot_0_position'), 'position', 0, ['robot0'], ['X', 'Y', 'Z'], [(255, 10, 10), (10, 255, 10), (10, 10, 255)]),
+            (self._t('robot_1_position'), 'position', 1, ['robot1'], ['X', 'Y', 'Z'], [(255, 10, 10), (10, 255, 10), (10, 10, 255)]),
+            (self._t('gripper_width'), 'gripper', None, ['robot0', 'robot1'], ['R0', 'R1'], [(255, 100, 100), (100, 255, 100)])
         ]
         
-        for plot_name, robots, labels, colors in plots:
-            cv2.putText(panel, plot_name, (15, y_offset), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1, cv2.LINE_AA)
+        for plot_name, plot_type, robot_id, robots, labels, colors in plots:
+            # Use Unicode-safe text rendering for plot titles
+            panel = cv2.cvtColor(panel, cv2.COLOR_RGB2BGR)
+            panel = self._put_text_unicode(
+                panel,
+                plot_name,
+                (15, y_offset - 5),
+                font_size=16,
+                color=(200, 200, 200)
+            )
+            panel = cv2.cvtColor(panel, cv2.COLOR_BGR2RGB)
             y_offset += 20
             
             cv2.rectangle(panel, (plot_x_start, y_offset), (plot_x_start + plot_w, y_offset + plot_h - 20), 
@@ -345,8 +611,7 @@ class Enhanced3DVisualizer(CombinedVisualizer):
             cv2.rectangle(panel, (plot_x_start, y_offset), (plot_x_start + plot_w, y_offset + plot_h - 20), 
                          (60, 65, 75), 1)
             
-            if "Position" in plot_name:
-                robot_id = 0 if "Robot 0" in plot_name else 1
+            if plot_type == 'position':
                 prefix = f'robot{robot_id}'
                 poses = self.data[prefix].get('poses', [])
                 
@@ -399,7 +664,7 @@ class Enhanced3DVisualizer(CombinedVisualizer):
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1, cv2.LINE_AA)
                         legend_x += 40
             
-            elif "Gripper" in plot_name:
+            elif plot_type == 'gripper':
                 all_gripper_series = []
                 for robot_prefix in robots:
                     gripper_data = self.data[robot_prefix].get('gripper', [])
@@ -474,7 +739,7 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         """创建完整布局"""
         header = self._create_header(frame_idx)
         camera_row = self._create_camera_row(frame_idx)
-        world_panel = self._add_panel_frame(world_image if world_image is not None else np.zeros((700, 900, 3), dtype=np.uint8), "3D世界视图", (100, 200, 255))
+        world_panel = self._add_panel_frame(world_image if world_image is not None else np.zeros((700, 900, 3), dtype=np.uint8), self._t('3d_world_view'), (100, 200, 255))
         plots_panel = self._create_trajectory_plots(frame_idx)
         
         h = max(world_panel.shape[0], plots_panel.shape[0])
@@ -493,37 +758,91 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         header = np.zeros((h, w, 3), dtype=np.uint8)
         header[:] = [20, 25, 35]
         
-        # 中文标题
-        im = Image.fromarray(cv2.cvtColor(header, cv2.COLOR_BGR2RGB))
-        dr = ImageDraw.Draw(im)
-        try:
-            ft = ImageFont.truetype("simhei.ttf", 24, encoding="utf-8")
-        except IOError:
-            print("未找到字体文件，使用默认字体，可能无法显示中文")
-            ft = ImageFont.load_default()
-        # ft = ImageFont.truetype("/System/Library/Fonts/Hiragino Sans GB.ttc", 24)
-        dr.text((20, 38), "机器人监控", font=ft, fill=(255, 255, 255))
-        header = cv2.cvtColor(np.array(im), cv2.COLOR_RGB2BGR)
+        # Title with language support using Unicode-safe rendering
+        title = self._t('window_title')
+        header = self._put_text_unicode(
+            cv2.cvtColor(header, cv2.COLOR_RGB2BGR),
+            title,
+            (20, 8),
+            font_size=24,
+            color=(255, 255, 255, 255)
+        )
+        header = cv2.cvtColor(header, cv2.COLOR_BGR2RGB)
         
-        cv2.circle(header, (250, 30), 6, (100, 255, 100), -1)
-        cv2.putText(header, f"Speed: {self.playback_speed}x", (270, 38), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (150, 150, 150), 1, cv2.LINE_AA)
+        cv2.circle(header, (280, 30), 6, (100, 255, 100), -1)
+        # Use Unicode-safe text rendering for Speed label
+        header = cv2.cvtColor(header, cv2.COLOR_RGB2BGR)
+        header = self._put_text_unicode(
+            header,
+            f"{self._t('speed')}: {self.playback_speed}x",
+            (300, 20),
+            font_size=18,
+            color=(150, 150, 150)
+        )
+        header = cv2.cvtColor(header, cv2.COLOR_BGR2RGB)
         
         ep_id, max_frames = self.episodes[self.ep_idx], len(self.data['robot0']['poses'])
-        cv2.putText(header, f"Ep {ep_id}/{len(self.episodes)} | Frame {frame_idx}/{max_frames-1}", 
-                   (w - 400, 38), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
+        # Use Unicode-safe text rendering for Episode/Frame info
+        header = cv2.cvtColor(header, cv2.COLOR_RGB2BGR)
+        header = self._put_text_unicode(
+            header,
+            f"{self._t('ep')} {ep_id}/{len(self.episodes)} | {self._t('frame')} {frame_idx}/{max_frames-1}",
+            (w - 400, 20),
+            font_size=18,
+            color=(200, 200, 200)
+        )
+        header = cv2.cvtColor(header, cv2.COLOR_BGR2RGB)
         return header
+    
+    def _resize_with_label_unicode(self, img, label, height, color=(255, 255, 255)):
+        """Resize image and add label with Unicode support"""
+        if img is None:
+            return None
+        h, w = img.shape[:2]
+        resized = cv2.resize(img, (int(w * height / h), height))
+        
+        # Check if label contains non-ASCII characters (like Chinese)
+        has_unicode = any(ord(char) > 127 for char in label)
+        
+        if has_unicode:
+            # Use PIL for Unicode text with outline effect
+            # Draw white outline (slightly offset in multiple directions for better outline)
+            for dx, dy in [(-1, -1), (-1, 1), (1, -1), (1, 1), (-2, 0), (2, 0), (0, -2), (0, 2)]:
+                resized = self._put_text_unicode(
+                    cv2.cvtColor(resized, cv2.COLOR_RGB2BGR),
+                    label,
+                    (10 + dx, 7 + dy),
+                    font_size=18,
+                    color=(255, 255, 255)
+                )
+                resized = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+            
+            # Draw colored text on top
+            resized = self._put_text_unicode(
+                cv2.cvtColor(resized, cv2.COLOR_RGB2BGR),
+                label,
+                (10, 7),
+                font_size=18,
+                color=color
+            )
+            resized = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+        else:
+            # Use original cv2.putText for ASCII text (English) - better rendering
+            cv2.putText(resized, label, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
+            cv2.putText(resized, label, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+        
+        return resized
     
     def _create_camera_row(self, frame_idx):
         """创建相机视图行"""
         height, all_images = 250, []
         for r in ROBOT_IDS:
             prefix, color = f'robot{r}', ((100, 100, 255) if r == 0 else (100, 255, 100))
-            robot_images = [resize_with_label(self.data[prefix][s][frame_idx].copy(), f"R{r} {l}", height, color) 
-                           for s, l in [('visual', 'Visual'), ('left_tactile', 'L-Tact'), ('right_tactile', 'R-Tact')]
+            robot_images = [self._resize_with_label_unicode(self.data[prefix][s][frame_idx].copy(), f"R{r} {l}", height, color) 
+                           for s, l in [('visual', self._t('visual')), ('left_tactile', self._t('left_tactile')), ('right_tactile', self._t('right_tactile'))]
                            if s in self.data[prefix] and frame_idx < len(self.data[prefix][s])]
             if robot_images:
-                all_images.append(self._add_robot_label(hstack_with_sep(robot_images, 2, 40), f"Robot {r}", color))
+                all_images.append(self._add_robot_label(hstack_with_sep(robot_images, 2, 40), f"{self._t('robot')} {r}", color))
         return hstack_with_sep(all_images, 5, 15) if all_images else np.zeros((height, 1600, 3), dtype=np.uint8)
     
     def _add_robot_label(self, img, label, color):
@@ -533,7 +852,15 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         panel[:] = [25, 30, 40]
         cv2.rectangle(panel, (0, 0), (panel.shape[1], header_h), (15, 20, 30), -1)
         cv2.circle(panel, (15, header_h//2), 5, color, -1)
-        cv2.putText(panel, label, (30, header_h//2 + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1, cv2.LINE_AA)
+        # Use Unicode-safe text rendering for robot label
+        panel = self._put_text_unicode(
+            cv2.cvtColor(panel, cv2.COLOR_RGB2BGR),
+            label,
+            (30, 5),
+            font_size=18,
+            color=(220, 220, 220)
+        )
+        panel = cv2.cvtColor(panel, cv2.COLOR_BGR2RGB)
         panel[header_h:, :] = img
         return panel
     
@@ -557,8 +884,16 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         
         # 倍速按钮
         speed_x = bar_x2 + 20
-        cv2.putText(bar, "Speed:", (speed_x, 25), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (150, 150, 150), 1, cv2.LINE_AA)
+        # Use Unicode-safe text rendering for Speed label
+        bar = cv2.cvtColor(bar, cv2.COLOR_RGB2BGR)
+        bar = self._put_text_unicode(
+            bar,
+            self._t('speed') + ":",
+            (speed_x, 8),
+            font_size=16,
+            color=(150, 150, 150)
+        )
+        bar = cv2.cvtColor(bar, cv2.COLOR_BGR2RGB)
         
         speeds = [0.25, 0.5, 1.0, 2.0, 5.0]
         btn_w, btn_h = 50, 25
@@ -583,9 +918,9 @@ class Enhanced3DVisualizer(CombinedVisualizer):
             cv2.putText(bar, label, (text_x, btn_y + 17), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, (220, 220, 220), 1, cv2.LINE_AA)
         
-        controls = "[A/D]Frame [W/S]Ep [P]Play [1-5]Speed [0]CamReset [T]CamMove [U/I]Raw [M]Ctrl [F]Claw [G]Axes [Q]Quit"
+        controls = "[A/D]Frame [W/S]Ep [P]Play [1-5]Speed [0]Reset [T]Move [./]Z [L]Lang [U/I]Raw [M]Grip [F]Fing [G]Axes [Q]Quit"
         cv2.putText(bar, controls, (20, 68), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (120, 120, 120), 1, cv2.LINE_AA)
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.38, (120, 120, 120), 1, cv2.LINE_AA)
         
         return bar
     
@@ -596,7 +931,17 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         panel[:] = [25, 30, 40]
         cv2.rectangle(panel, (0, 0), (panel.shape[1], header_h), (15, 20, 30), -1)
         cv2.circle(panel, (15, header_h//2), 5, color, -1)
-        cv2.putText(panel, title, (30, header_h//2+5), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1, cv2.LINE_AA)
+        
+        # Use Unicode-safe text rendering for panel title
+        panel = self._put_text_unicode(
+            cv2.cvtColor(panel, cv2.COLOR_RGB2BGR),
+            title,
+            (30, 5),
+            font_size=18,
+            color=(220, 220, 220, 220)
+        )
+        panel = cv2.cvtColor(panel, cv2.COLOR_BGR2RGB)
+        
         panel[header_h+border:header_h+border+img.shape[0], border:border+img.shape[1]] = img
         return panel
     
@@ -619,28 +964,8 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         auto_play = False
         frame_counter = 0
         
-        print("\n" + "=" * 70)
-        print("  Robot Monitor")
-        print("=" * 70)
-        print("  Controls:")
-        print("    [A/D]    前后帧")
-        print("    [W]      下一个Episode")
-        print("    [S]      上一个Episode")
-        print("    [P]      自动播放（Episode结束后自动跳转下一个）")
-        print("    [1-5]    速度: 0.25x, 0.5x, 1x, 2x, 5x")
-        print("    [←/→]    相机水平旋转")
-        print("    [↑/↓]    相机俯仰旋转")
-        print("    [+/-]    相机缩放")
-        print("    [0]      相机重置")
-        print("    [T]      相机平移模式")
-        print("    [C]      截图")
-        print("    [U]      显示Robot0原始变换")
-        print("    [I]      显示Robot1原始变换")
-        print("    [M]      显示夹爪网格")
-        print("    [F]      显示手指网格")
-        print("    [G]      显示手指坐标轴")
-        print("    [Q]      退出")
-        print("=" * 70 + "\n")
+        # Display startup info
+        self._display_startup_info()
         
         while True:
             frame = self.render_frame(self.frame_idx)
@@ -665,7 +990,7 @@ class Enhanced3DVisualizer(CombinedVisualizer):
                         # 到达当前Episode末尾
                         if self.auto_next_episode and self.ep_idx < len(self.episodes) - 1:
                             # 自动跳转下一个Episode
-                            print(f"Episode {self.episodes[self.ep_idx]} 完成，自动加载下一个...")
+                            self._safe_print(self._t('ep_complete').format(self.episodes[self.ep_idx]))
                             self.ep_idx += 1
                             self.load_episode()
                             frame_counter = 0
@@ -673,7 +998,7 @@ class Enhanced3DVisualizer(CombinedVisualizer):
                             # 最后一个Episode或关闭自动跳转
                             self.frame_idx = max_f - 1
                             auto_play = False
-                            print("播放完成")
+                            self._safe_print(self._t('play_complete'))
             
             key = cv2.waitKey(30) & 0xFF
             
@@ -685,7 +1010,7 @@ class Enhanced3DVisualizer(CombinedVisualizer):
                 elif self.ep_idx < len(self.episodes) - 1:
                     self.ep_idx += 1
                     self.load_episode()
-                    print(f"跳转到 Episode {self.episodes[self.ep_idx]}")
+                    self._safe_print(self._t('jump_to_ep').format(self.episodes[self.ep_idx]))
                     
             elif key == ord('a'):
                 # A键：上一帧
@@ -693,55 +1018,55 @@ class Enhanced3DVisualizer(CombinedVisualizer):
                     self.frame_idx -= 1
                     
             elif key == ord('w'):
-                # W键：下一个Episode（修正）
+                # W键：下一个Episode
                 if self.ep_idx < len(self.episodes) - 1:
                     self.ep_idx += 1
                     self.load_episode()
-                    print(f"跳转到 Episode {self.episodes[self.ep_idx]}")
+                    self._safe_print(self._t('jump_to_ep').format(self.episodes[self.ep_idx]))
                 else:
-                    print("已经是最后一个Episode")
+                    self._safe_print(self._t('last_episode'))
                     
             elif key == ord('s'):
-                # S键：上一个Episode（修正）
+                # S键：上一个Episode
                 if self.ep_idx > 0:
                     self.ep_idx -= 1
                     self.load_episode()
-                    print(f"跳转到 Episode {self.episodes[self.ep_idx]}")
+                    self._safe_print(self._t('jump_to_ep').format(self.episodes[self.ep_idx]))
                 else:
-                    print("已经是第一个Episode")
+                    self._safe_print(self._t('first_episode'))
                     
             elif key == ord('p'): 
                 auto_play = not auto_play
                 frame_counter = 0
-                print(f"自动播放: {'开启' if auto_play else '关闭'}")
+                self._safe_print(self._t('auto_play_on') if auto_play else self._t('auto_play_off'))
                 
-            elif key == ord('1'): self.playback_speed = 0.25; print("速度: 0.25x")
-            elif key == ord('2'): self.playback_speed = 0.5; print("速度: 0.5x")
-            elif key == ord('3'): self.playback_speed = 1.0; print("速度: 1x")
-            elif key == ord('4'): self.playback_speed = 2.0; print("速度: 2x")
-            elif key == ord('5'): self.playback_speed = 5.0; print("速度: 5x")
+            elif key == ord('1'): self.playback_speed = 0.25; self._safe_print(f"{self._t('speed')}: 0.25x")
+            elif key == ord('2'): self.playback_speed = 0.5; self._safe_print(f"{self._t('speed')}: 0.5x")
+            elif key == ord('3'): self.playback_speed = 1.0; self._safe_print(f"{self._t('speed')}: 1x")
+            elif key == ord('4'): self.playback_speed = 2.0; self._safe_print(f"{self._t('speed')}: 2x")
+            elif key == ord('5'): self.playback_speed = 5.0; self._safe_print(f"{self._t('speed')}: 5x")
             elif key in (ord('0'), ord(')')):
                 self._reset_camera_controls()
-                print("相机重置")
-            elif key in (82, 84, 81, 83):
+                self._safe_print(self._t('cam_reset_msg'))
+            elif key in (self.KEY_LEFT, self.KEY_UP, self.KEY_RIGHT, self.KEY_DOWN):
                 step = 0.08
                 if self._camera_translation_mode:
-                    if key == 81:
+                    if key == self.KEY_LEFT:
                         self._camera_target[0] -= step
-                    elif key == 83:
+                    elif key == self.KEY_RIGHT:
                         self._camera_target[0] += step
-                    elif key == 82:
+                    elif key == self.KEY_UP:
                         self._camera_target[1] += step
-                    elif key == 84:
+                    elif key == self.KEY_DOWN:
                         self._camera_target[1] -= step
                 else:
-                    if key == 81:
+                    if key == self.KEY_LEFT:
                         self._camera_yaw -= step
-                    elif key == 83:
+                    elif key == self.KEY_RIGHT:
                         self._camera_yaw += step
-                    elif key == 82:
+                    elif key == self.KEY_UP:
                         self._camera_pitch += step
-                    elif key == 84:
+                    elif key == self.KEY_DOWN:
                         self._camera_pitch -= step
                 self._refresh_world_camera()
             elif key in (ord('+'), ord('=')):
@@ -750,31 +1075,45 @@ class Enhanced3DVisualizer(CombinedVisualizer):
             elif key in (ord('-'), ord('_')):
                 self._camera_distance = self._camera_distance * 1.1
                 self._refresh_world_camera()
+            elif key == ord('.'):
+                if self._camera_translation_mode:
+                    self._camera_target[2] += 0.08
+                    self._refresh_world_camera()
+                    self._safe_print(self._t('cam_target_z').format(self._camera_target[2]))
+            elif key == ord('/'):
+                if self._camera_translation_mode:
+                    self._camera_target[2] -= 0.08
+                    self._refresh_world_camera()
+                    self._safe_print(self._t('cam_target_z').format(self._camera_target[2]))
             elif key == ord('t'):
                 self._camera_translation_mode = not self._camera_translation_mode
-                print(f"相机平移模式: {'开启' if self._camera_translation_mode else '关闭'}")
+                self._safe_print(self._t('cam_translate_on') if self._camera_translation_mode else self._t('cam_translate_off'))
+            elif key in (ord('l'), ord('L')):
+                self._switch_language()
             elif key == ord('c'):
                 import datetime
                 filename = f"monitor_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
                 cv2.imwrite(filename, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-                print(f"截图: {filename}")
+                self._safe_print(self._t('screenshot_saved').format(filename))
             elif key == ord('u'):
                 self._show_raw_transforms[0] = not self._show_raw_transforms[0]
-                print(f"Robot0原始变换: {'显示' if self._show_raw_transforms[0] else '隐藏'}")
+                msg = self._t('raw_transform_show').format(0) if self._show_raw_transforms[0] else self._t('raw_transform_hide').format(0)
+                self._safe_print(msg)
             elif key == ord('i'):
                 self._show_raw_transforms[1] = not self._show_raw_transforms[1]
-                print(f"Robot1原始变换: {'显示' if self._show_raw_transforms[1] else '隐藏'}")
+                msg = self._t('raw_transform_show').format(1) if self._show_raw_transforms[1] else self._t('raw_transform_hide').format(1)
+                self._safe_print(msg)
             elif key in (ord('m'), ord('M')):
                 self._show_controller_mesh = not self._show_controller_mesh
-                print(f"夹爪网格: {'显示' if self._show_controller_mesh else '隐藏'}")
+                self._safe_print(self._t('gripper_mesh_show') if self._show_controller_mesh else self._t('gripper_mesh_hide'))
             elif key in (ord('f'), ord('F')):
                 self._show_claw_finger_mesh = not self._show_claw_finger_mesh
-                print(f"手指网格: {'显示' if self._show_claw_finger_mesh else '隐藏'}")
+                self._safe_print(self._t('finger_mesh_show') if self._show_claw_finger_mesh else self._t('finger_mesh_hide'))
             elif key in (ord('g'), ord('G')):
                 self._show_finger_axes = not self._show_finger_axes
-                print(f"手指坐标轴: {'显示' if self._show_finger_axes else '隐藏'}")
+                self._safe_print(self._t('finger_axes_show') if self._show_finger_axes else self._t('finger_axes_hide'))
             elif key == ord('q'): 
-                print("\n退出\n")
+                self._safe_print(f"\n{self._t('exiting')}\n")
                 break
         
         cv2.destroyAllWindows()
