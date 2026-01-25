@@ -32,7 +32,8 @@ class Enhanced3DVisualizer(CombinedVisualizer):
             'cam_reset': '相机重置',
             'cam_translate_mode': '相机平移模式',
             'screenshot': '截图',
-            'show_raw_transform': '显示Robot{0}原始变换',
+            'show_left_raw_transform': '显示左夹爪原始变换',
+            'show_right_raw_transform': '显示右夹爪原始变换',
             'show_gripper_mesh': '显示夹爪网格',
             'show_finger_mesh': '显示手指网格',
             'show_finger_axes': '显示手指坐标轴',
@@ -50,8 +51,10 @@ class Enhanced3DVisualizer(CombinedVisualizer):
             'cam_translate_on': '相机平移模式: 开启',
             'cam_translate_off': '相机平移模式: 关闭',
             'screenshot_saved': '截图: {0}',
-            'raw_transform_show': 'Robot{0}原始变换: 显示',
-            'raw_transform_hide': 'Robot{0}原始变换: 隐藏',
+            'left_raw_transform_show': '左夹爪原始变换: 显示',
+            'left_raw_transform_hide': '左夹爪原始变换: 隐藏',
+            'right_raw_transform_show': '右夹爪原始变换: 显示',
+            'right_raw_transform_hide': '右夹爪原始变换: 隐藏',
             'gripper_mesh_show': '夹爪网格: 显示',
             'gripper_mesh_hide': '夹爪网格: 隐藏',
             'finger_mesh_show': '手指网格: 显示',
@@ -63,11 +66,17 @@ class Enhanced3DVisualizer(CombinedVisualizer):
             '3d_world_view': '3D世界视图',
             'language_switched': '语言已切换: 中文',
             # Panel text labels
-            'robot_0_position': 'Robot 0 位置 (m)',
-            'robot_1_position': 'Robot 1 位置 (m)',
+            'left_gripper_position': '左夹爪位移 (m)',
+            'right_gripper_position': '右夹爪位移 (m)',
             'gripper_width': '夹爪宽度 (m)',
+            'left_gripper_rotation': '左夹爪旋转 (度)',
+            'right_gripper_rotation': '右夹爪旋转 (度)',
+            'left_gripper': 'LG',
+            'right_gripper': 'RG',
+            'left_gripper_panel': '左夹爪',
+            'right_gripper_panel': '右夹爪',
             'robot': '机器人',
-            'visual': '视觉',
+            'visual': '相机',
             'left_tactile': '左触觉',
             'right_tactile': '右触觉',
             'ep': '回合',
@@ -90,7 +99,8 @@ class Enhanced3DVisualizer(CombinedVisualizer):
             'cam_reset': 'Camera Reset',
             'cam_translate_mode': 'Camera Translation Mode',
             'screenshot': 'Screenshot',
-            'show_raw_transform': 'Show Robot{0} Raw Transform',
+            'show_left_raw_transform': 'Show Left Gripper Raw Transform',
+            'show_right_raw_transform': 'Show Right Gripper Raw Transform',
             'show_gripper_mesh': 'Show Gripper Mesh',
             'show_finger_mesh': 'Show Finger Mesh',
             'show_finger_axes': 'Show Finger Axes',
@@ -108,8 +118,10 @@ class Enhanced3DVisualizer(CombinedVisualizer):
             'cam_translate_on': 'Camera Translation Mode: ON',
             'cam_translate_off': 'Camera Translation Mode: OFF',
             'screenshot_saved': 'Screenshot: {0}',
-            'raw_transform_show': 'Robot{0} Raw Transform: SHOW',
-            'raw_transform_hide': 'Robot{0} Raw Transform: HIDE',
+            'left_raw_transform_show': 'Left Gripper Raw Transform: SHOW',
+            'left_raw_transform_hide': 'Left Gripper Raw Transform: HIDE',
+            'right_raw_transform_show': 'Right Gripper Raw Transform: SHOW',
+            'right_raw_transform_hide': 'Right Gripper Raw Transform: HIDE',
             'gripper_mesh_show': 'Gripper Mesh: SHOW',
             'gripper_mesh_hide': 'Gripper Mesh: HIDE',
             'finger_mesh_show': 'Finger Mesh: SHOW',
@@ -121,9 +133,15 @@ class Enhanced3DVisualizer(CombinedVisualizer):
             '3d_world_view': '3D World View',
             'language_switched': 'Language switched: English',
             # Panel text labels
-            'robot_0_position': 'Robot 0 Position (m)',
-            'robot_1_position': 'Robot 1 Position (m)',
+            'left_gripper_position': 'Left Gripper Position (m)',
+            'right_gripper_position': 'Right Gripper Position (m)',
             'gripper_width': 'Gripper Width (m)',
+            'left_gripper_rotation': 'Left Gripper Rotation (deg)',
+            'right_gripper_rotation': 'Right Gripper Rotation (deg)',
+            'left_gripper': 'LG',
+            'right_gripper': 'RG',
+            'left_gripper_panel': 'Left Gripper',
+            'right_gripper_panel': 'Right Gripper',
             'robot': 'Robot',
             'visual': 'Visual',
             'left_tactile': 'L-Tact',
@@ -265,8 +283,8 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         self._safe_print(f"    [T]      {self._t('cam_translate_mode')}")
         self._safe_print(f"    [L]      {self._t('switch_language')}")
         self._safe_print(f"    [C]      {self._t('screenshot')}")
-        self._safe_print(f"    [U]      {self._t('show_raw_transform').format(0)}")
-        self._safe_print(f"    [I]      {self._t('show_raw_transform').format(1)}")
+        self._safe_print(f"    [U]      {self._t('show_left_raw_transform')}")
+        self._safe_print(f"    [I]      {self._t('show_right_raw_transform')}")
         self._safe_print(f"    [M]      {self._t('show_gripper_mesh')}")
         self._safe_print(f"    [F]      {self._t('show_finger_mesh')}")
         self._safe_print(f"    [G]      {self._t('show_finger_axes')}")
@@ -582,9 +600,11 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         max_frames = len(self.data['robot0']['poses'])
         
         plots = [
-            (self._t('robot_0_position'), 'position', 0, ['robot0'], ['X', 'Y', 'Z'], [(255, 10, 10), (10, 255, 10), (10, 10, 255)]),
-            (self._t('robot_1_position'), 'position', 1, ['robot1'], ['X', 'Y', 'Z'], [(255, 10, 10), (10, 255, 10), (10, 10, 255)]),
-            (self._t('gripper_width'), 'gripper', None, ['robot0', 'robot1'], ['R0', 'R1'], [(255, 100, 100), (100, 255, 100)])
+            (self._t('left_gripper_position'), 'position', 0, ['robot0'], ['X', 'Y', 'Z'], [(255, 10, 10), (10, 255, 10), (10, 10, 255)]),
+            (self._t('left_gripper_rotation'), 'rotation', 0, ['robot0'], ['Roll', 'Pitch', 'Yaw'], [(255, 0, 0), (0, 255, 0), (0, 0, 255)]),
+            (self._t('right_gripper_position'), 'position', 1, ['robot1'], ['X', 'Y', 'Z'], [(255, 10, 10), (10, 255, 10), (10, 10, 255)]),
+            (self._t('right_gripper_rotation'), 'rotation', 1, ['robot1'], ['Roll', 'Pitch', 'Yaw'], [(255, 0, 0), (0, 255, 0), (0, 0, 255)]),
+            (self._t('gripper_width'), 'gripper', None, ['robot0', 'robot1'], [self._t('left_gripper'), self._t('right_gripper')], [(255, 100, 100), (100, 255, 100)]),
         ]
         
         for plot_name, plot_type, robot_id, robots, labels, colors in plots:
@@ -657,6 +677,63 @@ class Enhanced3DVisualizer(CombinedVisualizer):
                         cv2.putText(panel, axis_name, (legend_x + 10, y_offset + 13), 
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1, cv2.LINE_AA)
                         legend_x += 40
+            
+            
+            elif plot_type == 'rotation':
+                # Extract Roll/Pitch/Yaw from pose matrix
+                prefix = f'robot{robot_id}'
+                poses = self.data[prefix].get('poses', [])
+                
+                if poses and len(poses) > 0:
+                    from scipy.spatial.transform import Rotation as R
+                    all_rpy = []
+                    for pose in poses:
+                        rot_matrix = pose[:3, :3]
+                        r = R.from_matrix(rot_matrix)
+                        rpy = r.as_euler('xyz', degrees=True)  # Roll, Pitch, Yaw
+                        all_rpy.append(rpy)
+                    
+                    all_rpy = np.array(all_rpy)
+                    
+                    for axis_idx, (axis_name, color) in enumerate(zip(labels, colors)):
+                        if len(all_rpy) > 1:
+                            data = all_rpy[:, axis_idx]
+                            data_min, data_max = data.min(), data.max()
+                            data_range = data_max - data_min if data_max > data_min else 1.0
+                            
+                            # 虚线（全轨迹）
+                            for i in range(1, len(data)):
+                                x1 = int(plot_x_start + (i - 1) / max_frames * plot_w)
+                                y1 = int(y_offset + (plot_h - 20) - ((data[i-1] - data_min) / data_range) * (plot_h - 30))
+                                x2 = int(plot_x_start + i / max_frames * plot_w)
+                                y2 = int(y_offset + (plot_h - 20) - ((data[i] - data_min) / data_range) * (plot_h - 30))
+                                dark_color = tuple(int(c * 0.3) for c in color)
+                                cv2.line(panel, (x1, y1), (x2, y2), dark_color, 1, cv2.LINE_AA)
+                            
+                            # 实线（当前进度）
+                            for i in range(1, min(frame_idx + 1, len(data))):
+                                x1 = int(plot_x_start + (i - 1) / max_frames * plot_w)
+                                y1 = int(y_offset + (plot_h - 20) - ((data[i-1] - data_min) / data_range) * (plot_h - 30))
+                                x2 = int(plot_x_start + i / max_frames * plot_w)
+                                y2 = int(y_offset + (plot_h - 20) - ((data[i] - data_min) / data_range) * (plot_h - 30))
+                                cv2.line(panel, (x1, y1), (x2, y2), color, 2, cv2.LINE_AA)
+                            
+                            # Y轴标签（按颜色错开）
+                            label_x = 5
+                            label_y_up = y_offset + 10 + axis_idx * 12
+                            label_y_down = y_offset + plot_h - 25 - axis_idx * 12
+                            cv2.putText(panel, f"{data_max:.2f}", (label_x, label_y_up), 
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.3, color, 1, cv2.LINE_AA)
+                            cv2.putText(panel, f"{data_min:.2f}", (label_x, label_y_down), 
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.3, color, 1, cv2.LINE_AA)
+                    
+                    # 图例
+                    legend_x = plot_x_start + 5
+                    for axis_name, color in zip(labels, colors):
+                        cv2.circle(panel, (legend_x, y_offset + 10), 4, color, -1)
+                        cv2.putText(panel, axis_name, (legend_x + 10, y_offset + 13), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1, cv2.LINE_AA)
+                        legend_x += 60
             
             elif plot_type == 'gripper':
                 all_gripper_series = []
@@ -832,11 +909,13 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         height, all_images = 250, []
         for r in ROBOT_IDS:
             prefix, color = f'robot{r}', ((100, 100, 255) if r == 0 else (100, 255, 100))
-            robot_images = [self._resize_with_label_unicode(self.data[prefix][s][frame_idx].copy(), f"R{r} {l}", height, color) 
+            gripper_label = self._t('left_gripper') if r == 0 else self._t('right_gripper')
+            robot_images = [self._resize_with_label_unicode(self.data[prefix][s][frame_idx].copy(), f"{gripper_label} {l}", height, color) 
                            for s, l in [('visual', self._t('visual')), ('left_tactile', self._t('left_tactile')), ('right_tactile', self._t('right_tactile'))]
                            if s in self.data[prefix] and frame_idx < len(self.data[prefix][s])]
             if robot_images:
-                all_images.append(self._add_robot_label(hstack_with_sep(robot_images, 2, 40), f"{self._t('robot')} {r}", color))
+                panel_label = self._t('left_gripper_panel') if r == 0 else self._t('right_gripper_panel')
+                all_images.append(self._add_robot_label(hstack_with_sep(robot_images, 2, 40), panel_label, color))
         return hstack_with_sep(all_images, 5, 15) if all_images else np.zeros((height, 1600, 3), dtype=np.uint8)
     
     def _add_robot_label(self, img, label, color):
@@ -1101,11 +1180,11 @@ class Enhanced3DVisualizer(CombinedVisualizer):
                 self._safe_print(self._t('screenshot_saved').format(filename))
             elif key == ord('u'):
                 self._show_raw_transforms[0] = not self._show_raw_transforms[0]
-                msg = self._t('raw_transform_show').format(0) if self._show_raw_transforms[0] else self._t('raw_transform_hide').format(0)
+                msg = self._t('left_raw_transform_show') if self._show_raw_transforms[0] else self._t('left_raw_transform_hide')
                 self._safe_print(msg)
             elif key == ord('i'):
                 self._show_raw_transforms[1] = not self._show_raw_transforms[1]
-                msg = self._t('raw_transform_show').format(1) if self._show_raw_transforms[1] else self._t('raw_transform_hide').format(1)
+                msg = self._t('right_raw_transform_show') if self._show_raw_transforms[1] else self._t('right_raw_transform_hide')
                 self._safe_print(msg)
             elif key in (ord('m'), ord('M')):
                 self._show_controller_mesh = not self._show_controller_mesh
