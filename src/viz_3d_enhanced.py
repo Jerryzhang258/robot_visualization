@@ -857,7 +857,7 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         header = cv2.cvtColor(header, cv2.COLOR_RGB2BGR)
         header = self._put_text_unicode(
             header,
-            f"{self._t('ep')} {ep_id}/{len(self.episodes)} | {self._t('frame')} {frame_idx}/{max_frames-1}",
+            f"{self._t('ep')} {ep_id+1}/{len(self.episodes)} | {self._t('frame')} {frame_idx}/{max_frames-1}",
             (w - 400, 20),
             font_size=18,
             color=(200, 200, 200)

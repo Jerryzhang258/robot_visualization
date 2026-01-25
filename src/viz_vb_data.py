@@ -715,7 +715,7 @@ class CombinedVisualizer:
     
     def setup_renderers(self):
         """初始化渲染器"""
-        self.render_size = (400, 300)
+        self.render_size = (550, 400)
         self.world_render_size = (self.render_size[0] * 2, self.render_size[1] * 2)
         self.renderers = {}
         
