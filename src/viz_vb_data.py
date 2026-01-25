@@ -420,12 +420,16 @@ def _scale_transform(T, scale):
 
 
 def _fix_rotation(T):
-    u, _, vt = np.linalg.svd(T[:3, :3])
-    r = u @ vt
-    if np.linalg.det(r) < 0:
-        u[:, -1] *= -1
-        r = u @ vt
-    T[:3, :3] = r
+    """Fix left-handed rotation matrices by negating the first column (X-axis).
+    
+    The calibration produces left-handed frames for right fingers due to mirroring.
+    We fix this by negating the X-axis, which preserves Y and Z (including tip direction).
+    """
+    R = T[:3, :3].copy()
+    if np.linalg.det(R) < 0:
+        # Negate the X-axis column to flip handedness
+        R[:, 0] = -R[:, 0]
+    T[:3, :3] = R
     return T
 
 
