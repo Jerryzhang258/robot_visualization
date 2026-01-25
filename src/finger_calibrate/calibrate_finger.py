@@ -1319,7 +1319,8 @@ class _NudgeViewer(SceneViewer):
         if symbol == pyglet_key.P:
             mirror = np.eye(4)
             mirror[0, 0] = -1.0
-            _write_calibration_result(
+            ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            snapshot_path = _write_calibration_result(
                 self.state["save_dir"],
                 self.state["no_finger_path"],
                 self.state["finger_path"],
@@ -1337,9 +1338,10 @@ class _NudgeViewer(SceneViewer):
                 self.state["split_value"],
                 self.state["no_finger_mesh"],
                 self.state["finger_mesh"],
-                f"snapshot_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                f"nudge_{ts}",
+                json_name=f"nudge_snapshot_{ts}.json",
             )
-            print("Saved nudge snapshot.")
+            print(f"Saved nudge snapshot: {snapshot_path}")
             return
         if symbol in (pyglet_key.X, pyglet_key.Y, pyglet_key.Z):
             axis_map = {pyglet_key.X: 0, pyglet_key.Y: 1, pyglet_key.Z: 2}
@@ -1420,19 +1422,6 @@ class _NudgeViewer(SceneViewer):
         self._redraw = True
         self.dispatch_event("on_draw")
         self.flip()
-
-
-def _save_nudge_snapshot(save_dir, center_pose, left_rel):
-    os.makedirs(save_dir, exist_ok=True)
-    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    path = os.path.join(save_dir, f"nudge_snapshot_{ts}.json")
-    payload = {
-        "center_pose": center_pose.tolist(),
-        "left_rel": left_rel.tolist(),
-    }
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
-    return path
 
 
 def _write_calibration_result(out_dir, no_finger_path, finger_path, assem_path,
@@ -1611,6 +1600,68 @@ class _RoundViewer(SceneViewer):
         super().on_key_press(symbol, modifiers)
 
 
+def _pre_optimization_prompt(round_idx, center_pose, left_rel, no_finger_aligned, assem, finger,
+                             out_dir, no_finger_path, finger_path, assem_path, t_nf_to_assem,
+                             tip_axis, symmetric, samples, icp_iters, residual_thresh,
+                             split_axis, split_value):
+    """Display current state BEFORE optimization and prompt user.
+    
+    Allows user to:
+    - Continue with optimization
+    - Save current state and quit (without running optimization)
+    - Discard and quit
+    """
+    mirror = np.eye(4)
+    mirror[0, 0] = -1.0
+    left_tf = center_pose @ left_rel
+    right_tf = center_pose @ (mirror @ left_rel)
+    
+    round_scene = trimesh.Scene()
+    round_scene.add_geometry(_colorize(no_finger_aligned, [0.7, 0.7, 0.7, 0.6]), node_name="base")
+    round_scene.add_geometry(_colorize(assem, [0.2, 0.6, 0.9, 0.2]), node_name="assem")
+    round_scene.add_geometry(_colorize(finger, [0.9, 0.4, 0.4, 0.95]), node_name="finger_left", transform=left_tf)
+    round_scene.add_geometry(_colorize(finger, [0.4, 0.9, 0.4, 0.95]), node_name="finger_right", transform=right_tf)
+    
+    print(f"\n→ BEFORE Round {round_idx} optimization. Press key in viewer window:")
+    print("  [C] continue with optimization")
+    print("  [S] SAVE current state and quit (skip optimization)")
+    print("  [D/Q/Esc] discard and quit")
+    
+    viewer = _RoundViewer(round_scene, round_idx)
+    pyglet.app.run()
+    
+    choice = viewer.choice or 'd'
+    
+    if choice == 's':
+        # Save current state as final result
+        ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        json_path = _write_calibration_result(
+            out_dir,
+            no_finger_path,
+            finger_path,
+            assem_path,
+            t_nf_to_assem,
+            left_tf,
+            right_tf,
+            tip_axis,
+            symmetric,
+            True,  # nudge=True since we're saving from interactive mode
+            samples,
+            icp_iters,
+            residual_thresh,
+            split_axis,
+            split_value,
+            no_finger_aligned,
+            finger,
+            f"pre_opt_r{round_idx}_{ts}",
+            json_name="calibration_result.json",
+        )
+        print(f"  ✓ Saved pre-optimization state to: {json_path}")
+        return 'saved'
+    
+    return choice
+
+
 def _round_prompt(round_idx, left_tf, right_tf, no_finger_aligned, assem, finger):
     """Display optimization round result and prompt user for next action.
     
@@ -1780,6 +1831,24 @@ def calibrate(no_finger_path, finger_path, assem_path, out_dir,
         while True:
             round_idx += 1
             print(f"\n  --- Round {round_idx} ---")
+            
+            # Show pre-optimization state and allow user to save/quit before optimization
+            if interactive_rounds:
+                pre_choice = _pre_optimization_prompt(
+                    round_idx, best_center, best_left_rel,
+                    no_finger_aligned, assem, finger,
+                    out_dir, no_finger_path, finger_path, assem_path, t_nf_to_assem,
+                    tip_axis, symmetric, samples, icp_iters, residual_thresh,
+                    split_axis, split_value,
+                )
+                if pre_choice == 'saved':
+                    print("  ✓ Saved current state, skipping optimization")
+                    # Return the path to indicate success
+                    return os.path.join(out_dir, "calibration_result.json")
+                if pre_choice == 'd':
+                    print("❌ Discarded by user before optimization")
+                    return None
+                # pre_choice == 'c' means continue with optimization
             
             # Joint optimization: optimize center_pose and left_rel together
             # Score is combined distance of both fingers to their targets

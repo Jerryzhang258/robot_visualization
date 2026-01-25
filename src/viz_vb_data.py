@@ -22,6 +22,15 @@ FINGER_CALIBRATION_JSON = os.environ.get(
     "FINGER_CALIBRATION_JSON",
     os.path.join("src", "finger_calibrate", "output", "calibration_result.json"),
 )
+# Separate calibration files for left (robot0) and right (robot1) grippers
+FINGER_CALIBRATION_JSON_LEFT = os.environ.get(
+    "FINGER_CALIBRATION_JSON_LEFT",
+    os.path.join("src", "finger_calibrate", "output", "calibration_result_left.json"),
+)
+FINGER_CALIBRATION_JSON_RIGHT = os.environ.get(
+    "FINGER_CALIBRATION_JSON_RIGHT",
+    os.path.join("src", "finger_calibrate", "output", "calibration_result_right.json"),
+)
 FINGER_CALIBRATION_SCALE = float(os.environ.get("FINGER_CALIBRATION_SCALE", "0.001"))
 
 # 传感器配置
@@ -489,10 +498,20 @@ def _load_finger_mesh():
     return pyrender.Mesh.from_trimesh(mesh, smooth=True)
 
 
-def _load_finger_calibration():
-    if not os.path.exists(FINGER_CALIBRATION_JSON):
+def _load_finger_calibration(calibration_path=None):
+    """Load finger calibration from JSON file.
+    
+    Args:
+        calibration_path: Path to calibration JSON file. If None, uses FINGER_CALIBRATION_JSON.
+    
+    Returns:
+        Calibration dict with keys: left_to_no_finger, right_to_no_finger, 
+        center_to_no_finger, open_axis_no_finger, tip_axis
+    """
+    path = calibration_path if calibration_path else FINGER_CALIBRATION_JSON
+    if not os.path.exists(path):
         return None
-    with open(FINGER_CALIBRATION_JSON, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
     tip_axis = data.get("tip_axis", "z")
@@ -529,6 +548,34 @@ def _load_finger_calibration():
         "open_axis_no_finger": axis,
         "tip_axis": tip_axis,
     }
+
+
+def _load_finger_calibrations_per_robot():
+    """Load separate finger calibrations for each robot.
+    
+    Returns:
+        Dict mapping robot_id (0, 1) to calibration data.
+        robot0 uses calibration_result_left.json (left gripper system)
+        robot1 uses calibration_result_right.json (right gripper system)
+    """
+    calibrations = {}
+    
+    # Robot 0 = left gripper system
+    if os.path.exists(FINGER_CALIBRATION_JSON_LEFT):
+        calibrations[0] = _load_finger_calibration(FINGER_CALIBRATION_JSON_LEFT)
+    
+    # Robot 1 = right gripper system
+    if os.path.exists(FINGER_CALIBRATION_JSON_RIGHT):
+        calibrations[1] = _load_finger_calibration(FINGER_CALIBRATION_JSON_RIGHT)
+    
+    # Fallback to single calibration file for both if separate files don't exist
+    if not calibrations:
+        single_calib = _load_finger_calibration()
+        if single_calib:
+            calibrations[0] = single_calib
+            calibrations[1] = single_calib
+    
+    return calibrations if calibrations else None
 
 
 def _finger_poses_from_width(gripper_width, calibration):
@@ -633,8 +680,12 @@ class CombinedVisualizer:
         self.render_size = (400, 300)
         self.world_render_size = (self.render_size[0] * 2, self.render_size[1] * 2)
         self.renderers = {}
-        self.finger_calibration = _load_finger_calibration()
-        self.finger_mesh = _load_finger_mesh() if self.finger_calibration else None
+        
+        # Load per-robot calibrations (robot0=left system, robot1=right system)
+        self.finger_calibrations = _load_finger_calibrations_per_robot()
+        # For backward compatibility, also keep single calibration reference
+        self.finger_calibration = self.finger_calibrations.get(0) if self.finger_calibrations else None
+        self.finger_mesh = _load_finger_mesh() if self.finger_calibrations else None
         self.finger_center_poses = {r: None for r in ROBOT_IDS}
         
         # 点云渲染器
@@ -670,8 +721,12 @@ class CombinedVisualizer:
         color, _ = renderer.render(scene, flags=RenderFlags.RGBA)
         return color[:, :, :3]
     
-    def render_trajectory(self, poses, current_idx, renderer, color, gripper_width=None):
-        """渲染轨迹"""
+    def render_trajectory(self, poses, current_idx, renderer, color, gripper_width=None, robot_id=0):
+        """渲染轨迹
+        
+        Args:
+            robot_id: Robot ID (0 or 1) for selecting the correct calibration.
+        """
         scene = pyrender.Scene(bg_color=[0.1, 0.1, 0.1, 1.0])
 
         if not poses or current_idx >= len(poses):
@@ -703,8 +758,9 @@ class CombinedVisualizer:
         scene.add(placeholder_cad, pose=frame_pose @ cad_offset)
 
         if gripper_width is not None:
-            if self.finger_calibration and self.finger_mesh:
-                _, left_pose, right_pose = _finger_poses_from_width(gripper_width, self.finger_calibration)
+            calib = self.finger_calibrations.get(robot_id) if self.finger_calibrations else None
+            if calib and self.finger_mesh:
+                _, left_pose, right_pose = _finger_poses_from_width(gripper_width, calib)
                 scene.add(self.finger_mesh, pose=frame_pose @ left_pose)
                 scene.add(self.finger_mesh, pose=frame_pose @ right_pose)
             else:
@@ -713,7 +769,7 @@ class CombinedVisualizer:
                 scene.add(right_mesh, pose=frame_pose @ right_pose)
             
             # Quest手柄（垂直向上）
-            ctrl = _quest_controller_mesh(is_left=(r==1))  # 左手装右手柄，右手装左手柄
+            ctrl = _quest_controller_mesh(is_left=(robot_id==1))  # 左手装右手柄，右手装左手柄
             if ctrl:
                 from scipy.spatial.transform import Rotation
                 ctrl_tf = np.eye(4)
@@ -791,8 +847,8 @@ class CombinedVisualizer:
                     scene.add(left_mesh, pose=frame_pose @ left_pose)
                     scene.add(right_mesh, pose=frame_pose @ right_pose)
 
-                if self.finger_calibration and self.finger_mesh:
-                    center_pose, left_pose, right_pose = _finger_poses_from_width(float(gripper[current_idx]), self.finger_calibration)
+                if self.finger_calibrations and self.finger_calibrations.get(r) and self.finger_mesh:
+                    center_pose, left_pose, right_pose = _finger_poses_from_width(float(gripper[current_idx]), self.finger_calibrations[r])
                     self.finger_center_poses[r] = frame_pose @ center_pose
                     scene.add(self.finger_mesh, pose=frame_pose @ left_pose)
                     scene.add(self.finger_mesh, pose=frame_pose @ right_pose)

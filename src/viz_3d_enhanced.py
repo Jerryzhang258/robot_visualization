@@ -269,10 +269,12 @@ class Enhanced3DVisualizer(CombinedVisualizer):
 
             gripper = self.data[prefix].get('gripper', [])
             if gripper and current_idx < len(gripper):
-                if getattr(self, "finger_calibration", None):
+                # Get calibration for this specific robot
+                calib = self.finger_calibrations.get(r) if getattr(self, "finger_calibrations", None) else None
+                if calib:
                     center_pose, left_pose, right_pose = _finger_poses_from_width(
                         float(gripper[current_idx]),
-                        self.finger_calibration,
+                        calib,
                     )
                 else:
                     grip_width = float(gripper[current_idx])
