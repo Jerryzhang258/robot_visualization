@@ -133,7 +133,7 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         }
     }
     
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, gripper_axis_size=0.08, **kwargs):
         self.window_name = "Robot Monitor"
         self.playback_speed = 1.0
         self.auto_next_episode = True  # 自动播放下一个Episode
@@ -146,10 +146,8 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         self._cached_finger_mesh = None  # Legacy single mesh
         self._cached_left_finger_mesh = None  # Separate left finger mesh
         self._cached_right_finger_mesh = None  # Separate right finger mesh
-        self._cached_controller_meshes = None
         self._cached_gripper_mesh_left = None
         self._cached_gripper_mesh_right = None
-        self._cached_controller_meshes = {}
         self._show_raw_transforms = {0: False, 1: False}
         self._show_controller_mesh = True
         self._show_claw_finger_mesh = True
@@ -162,12 +160,11 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         self._camera_distance = 0.6
         self._camera_target = np.zeros(3, dtype=np.float64)
         
+        # Gripper axis visualization size
+        self._gripper_axis_size = gripper_axis_size
+        
         # Language settings (default: Chinese)
         self._language = 'zh'
-        
-        # Cross-platform arrow key codes
-        # OpenCV returns different codes on Windows vs Linux
-        self._setup_arrow_key_codes()
         
         super().__init__(*args, **kwargs)
     
@@ -254,17 +251,16 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         self._safe_print(f"  {self._t('window_title')}")
         self._safe_print("=" * 70)
         self._safe_print(f"  {self._t('platform')}: {system}")
-        self._safe_print(f"  {self._t('arrow_keys')}: Left={self.KEY_LEFT}, Up={self.KEY_UP}, Right={self.KEY_RIGHT}, Down={self.KEY_DOWN}")
         self._safe_print(f"  {self._t('controls')}:")
         self._safe_print(f"    [A/D]    {self._t('frame_nav')}")
         self._safe_print(f"    [W]      {self._t('next_episode')}")
         self._safe_print(f"    [S]      {self._t('prev_episode')}")
         self._safe_print(f"    [P]      {self._t('auto_play')}")
         self._safe_print(f"    [1-5]    {self._t('speed')}: 0.25x, 0.5x, 1x, 2x, 5x")
-        self._safe_print(f"    [←/→]    {self._t('cam_rotate_h')}")
-        self._safe_print(f"    [↑/↓]    {self._t('cam_rotate_v')}")
+        self._safe_print(f"    [H/K]    {self._t('cam_rotate_h')}")
+        self._safe_print(f"    [O/Y]    {self._t('cam_rotate_v')}")
         self._safe_print(f"    [+/-]    {self._t('cam_zoom')}")
-        self._safe_print(f"    [./]     {self._t('cam_z_translate')}")
+        self._safe_print(f"    [N/Z]    {self._t('cam_z_translate')}")
         self._safe_print(f"    [0]      {self._t('cam_reset')}")
         self._safe_print(f"    [T]      {self._t('cam_translate_mode')}")
         self._safe_print(f"    [L]      {self._t('switch_language')}")
@@ -276,23 +272,6 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         self._safe_print(f"    [G]      {self._t('show_finger_axes')}")
         self._safe_print(f"    [Q]      {self._t('quit')}")
         self._safe_print("=" * 70 + "\n")
-    
-    def _setup_arrow_key_codes(self):
-        """Setup arrow key codes for cross-platform compatibility"""
-        system = platform.system()
-        
-        if system == 'Windows':
-            # Windows arrow key codes (extended keys)
-            self.KEY_LEFT = 2424832    # 0x250000
-            self.KEY_UP = 2490368      # 0x260000
-            self.KEY_RIGHT = 2555904   # 0x270000
-            self.KEY_DOWN = 2621440    # 0x280000
-        else:
-            # Linux/macOS arrow key codes
-            self.KEY_LEFT = 81
-            self.KEY_UP = 82
-            self.KEY_RIGHT = 83
-            self.KEY_DOWN = 84
 
     def setup_renderers(self):
         super().setup_renderers()
@@ -300,7 +279,7 @@ class Enhanced3DVisualizer(CombinedVisualizer):
 
     def _init_world_scene_cache(self):
         """初始化并缓存世界场景、相机和静态网格"""
-        from viz_vb_data import (_axis_mesh, _quest_controller_mesh)
+        from viz_vb_data import _axis_mesh
 
         scene = pyrender.Scene(bg_color=[0.05, 0.08, 0.12, 1.0])
 
@@ -312,7 +291,8 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         for axis_mesh in coord_axes:
             scene.add(axis_mesh)
 
-        self._cached_axis_mesh = _axis_mesh(size=0.05)
+        # Create gripper axis mesh with configurable size
+        self._cached_axis_mesh = _axis_mesh(size=self._gripper_axis_size)
 
         wrist = trimesh.creation.cylinder(radius=0.02, height=0.03, sections=16)
         wrist.visual.vertex_colors = np.array([180, 180, 180, 255], dtype=np.uint8)
@@ -372,12 +352,6 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         right_system_mesh.apply_scale(0.001)
         right_system_mesh.visual.vertex_colors = np.array([180, 180, 180, 255], dtype=np.uint8)
         self._cached_gripper_mesh_right = pyrender.Mesh.from_trimesh(right_system_mesh, smooth=True)
-
-
-        self._cached_controller_meshes = {
-            0: _quest_controller_mesh(is_left=False),
-            1: _quest_controller_mesh(is_left=True),
-        }
 
         self._world_scene = scene
         self._world_dynamic_nodes = []
@@ -575,20 +549,10 @@ class Enhanced3DVisualizer(CombinedVisualizer):
                         self._world_dynamic_nodes.append(scene.add(self._cached_finger_mesh, pose=frame_pose @ right_pose))
 
                 if self._show_finger_axes:
-                    axis_mesh = self._cached_axis_mesh or _axis_mesh(size=0.05)
+                    axis_mesh = self._cached_axis_mesh or _axis_mesh(size=self._gripper_axis_size)
                     self._world_dynamic_nodes.append(scene.add(axis_mesh, pose=frame_pose @ center_pose))
                     self._world_dynamic_nodes.append(scene.add(axis_mesh, pose=frame_pose @ left_pose))
                     self._world_dynamic_nodes.append(scene.add(axis_mesh, pose=frame_pose @ right_pose))
-            # else:
-            #     self._world_dynamic_nodes.append(scene.add(self._cached_gripper_mesh_right, pose=frame_pose))
-            
-            if self._show_controller_mesh:
-                ctrl_mesh = self._cached_controller_meshes.get(r)
-                if ctrl_mesh:
-                    ctrl_tf = np.eye(4)
-                    ctrl_tf[:3, :3] = Rotation.from_euler('y', 90, degrees=True).as_matrix()
-                    ctrl_tf[:3, 3] = [0, 0, 0.03]
-                    self._world_dynamic_nodes.append(scene.add(ctrl_mesh, pose=frame_pose @ ctrl_tf))
 
         color_img, _ = self.renderers['world'].render(scene, flags=RenderFlags.RGBA)
         return color_img[:, :, :3]
@@ -1078,26 +1042,35 @@ class Enhanced3DVisualizer(CombinedVisualizer):
             elif key in (ord('0'), ord(')')):
                 self._reset_camera_controls()
                 self._safe_print(self._t('cam_reset_msg'))
-            elif key in (self.KEY_LEFT, self.KEY_UP, self.KEY_RIGHT, self.KEY_DOWN):
+            # Camera horizontal rotation/translation: H (left), K (right)
+            elif key in (ord('h'), ord('H'), ord('k'), ord('K')):
                 step = 0.08
+                key_lower = chr(key).lower()
                 if self._camera_translation_mode:
-                    if key == self.KEY_LEFT:
+                    if key_lower == 'h':  # Move left
                         self._camera_target[0] -= step
-                    elif key == self.KEY_RIGHT:
+                    elif key_lower == 'k':  # Move right
                         self._camera_target[0] += step
-                    elif key == self.KEY_UP:
-                        self._camera_target[1] += step
-                    elif key == self.KEY_DOWN:
-                        self._camera_target[1] -= step
                 else:
-                    if key == self.KEY_LEFT:
+                    if key_lower == 'h':  # Rotate left
                         self._camera_yaw -= step
-                    elif key == self.KEY_RIGHT:
+                    elif key_lower == 'k':  # Rotate right
                         self._camera_yaw += step
-                    elif key == self.KEY_UP:
-                        self._camera_pitch += step
-                    elif key == self.KEY_DOWN:
+                self._refresh_world_camera()
+            # Camera vertical rotation/translation: O (down), Y (up)
+            elif key in (ord('o'), ord('O'), ord('y'), ord('Y')):
+                step = 0.08
+                key_lower = chr(key).lower()
+                if self._camera_translation_mode:
+                    if key_lower == 'o':  # Move down
+                        self._camera_target[1] -= step
+                    elif key_lower == 'y':  # Move up
+                        self._camera_target[1] += step
+                else:
+                    if key_lower == 'o':  # Rotate down
                         self._camera_pitch -= step
+                    elif key_lower == 'y':  # Rotate up
+                        self._camera_pitch += step
                 self._refresh_world_camera()
             elif key in (ord('+'), ord('=')):
                 self._camera_distance = max(self._camera_distance * 0.9, 0.05)
@@ -1105,14 +1078,15 @@ class Enhanced3DVisualizer(CombinedVisualizer):
             elif key in (ord('-'), ord('_')):
                 self._camera_distance = self._camera_distance * 1.1
                 self._refresh_world_camera()
-            elif key == ord('.'):
-                if self._camera_translation_mode:
-                    self._camera_target[2] += 0.08
-                    self._refresh_world_camera()
-                    self._safe_print(self._t('cam_target_z').format(self._camera_target[2]))
-            elif key == ord('/'):
+            # Z-axis translation: N (down), Z (up)
+            elif key in (ord('n'), ord('N')):
                 if self._camera_translation_mode:
                     self._camera_target[2] -= 0.08
+                    self._refresh_world_camera()
+                    self._safe_print(self._t('cam_target_z').format(self._camera_target[2]))
+            elif key in (ord('z'), ord('Z')):
+                if self._camera_translation_mode:
+                    self._camera_target[2] += 0.08
                     self._refresh_world_camera()
                     self._safe_print(self._t('cam_target_z').format(self._camera_target[2]))
             elif key == ord('t'):
@@ -1168,6 +1142,8 @@ def main():
     parser.add_argument('--output_video', '-o', type=str, default=None)
     parser.add_argument('--fps', type=int, default=30)
     parser.add_argument('--continue_after_record', "-c", action='store_true')
+    parser.add_argument('--gripper_axis_size', '-g', type=float, default=0.08,
+                        help='Size of the gripper coordinate axis visualization (default: 0.08)')
     args = parser.parse_args()
     
     if not os.path.exists(args.zarr_path): 
@@ -1177,7 +1153,13 @@ def main():
     try:
         rb = ReplayBuffer.create_from_group(zarr.open_group(store=store, mode='r'))
         print(f"加载: {rb.n_steps:,} 帧, {rb.n_episodes} episodes\n")
-        Enhanced3DVisualizer(rb, np.arange(rb.n_episodes), args.record, args.record_episode, args.output_video, args.fps, args.continue_after_record)
+        Enhanced3DVisualizer(
+            rb, np.arange(rb.n_episodes), 
+            args.record, args.record_episode, 
+            args.output_video, args.fps, 
+            args.continue_after_record,
+            gripper_axis_size=args.gripper_axis_size
+        )
     finally:
         store.close()
 
