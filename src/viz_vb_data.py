@@ -532,16 +532,46 @@ def _load_finger_calibration():
 
 
 def _finger_poses_from_width(gripper_width, calibration):
+    """Compute finger poses given gripper opening width.
+    
+    The fingers move along the open_axis, starting from the calibrated center position.
+    The rotation of each finger comes from the calibration data directly.
+    """
     center = calibration["center_to_no_finger"].copy()
     axis = calibration["open_axis_no_finger"]
     half = float(gripper_width) * 0.5
+    
+    # Get the calibrated finger positions and rotations
+    left_calib = calibration["left_to_no_finger"]
+    right_calib = calibration["right_to_no_finger"]
+    
+    # Compute how far each finger is from center in the calibration
     center_pos = center[:3, 3]
-    left_pos = center_pos - axis * half
-    right_pos = center_pos + axis * half
-
-    rot_z_pi = Rotation.from_euler("z", 180, degrees=True).as_matrix()
-    left_rot = calibration["left_to_no_finger"][:3, :3]
-    right_rot = left_rot @ rot_z_pi
+    left_calib_offset = np.dot(left_calib[:3, 3] - center_pos, axis)
+    right_calib_offset = np.dot(right_calib[:3, 3] - center_pos, axis)
+    
+    # The open axis points from left to right, so:
+    # - left finger is at center_pos + left_offset * axis (left_offset is negative)
+    # - right finger is at center_pos + right_offset * axis (right_offset is positive)
+    # When gripper opens, both move outward along the axis
+    
+    # Compute the calibrated half-width (distance from center to finger at calibration time)
+    calib_half_width = (right_calib_offset - left_calib_offset) / 2.0
+    
+    # Scale factor: how much to move from calibration position
+    # If calib_half_width is ~0, fingers don't move
+    if abs(calib_half_width) > 1e-6:
+        scale = half / calib_half_width
+    else:
+        scale = 1.0
+    
+    # New finger positions: move along axis proportionally
+    left_pos = center_pos + (left_calib_offset * scale) * axis
+    right_pos = center_pos + (right_calib_offset * scale) * axis
+    
+    # Use the calibrated rotations directly
+    left_rot = left_calib[:3, :3]
+    right_rot = right_calib[:3, :3]
 
     left_pose = np.eye(4)
     right_pose = np.eye(4)
