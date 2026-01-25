@@ -83,27 +83,21 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         self._cached_finger_mesh = pyrender.Mesh.from_trimesh(finger_mesh, smooth=True)
 
         # load gripper meshes
-        left_system_path = 'src/meshes/left_system.STL'
-        right_system_path = 'src/meshes/left_no_finger.STL'
-        assert os.path.exists(left_system_path), f"缺少夹爪网格文件: {left_system_path}"
-        if not os.path.exists(right_system_path):
-            right_system_path = None
+        left_system_path = 'src/meshes/left_no_finger.STL'
+        right_system_path = 'src/meshes/right_no_finger.STL'
+        assert os.path.exists(left_system_path), f"缺少左手夹爪STL文件: {left_system_path}"
+        assert os.path.exists(right_system_path), f"缺少右手夹爪STL文件: {right_system_path}"
 
-        left_gripper_mesh = trimesh.load(left_system_path)
-        left_gripper_mesh.apply_scale(0.001)
-        left_gripper_mesh.visual.vertex_colors = np.array([180, 180, 180, 255], dtype=np.uint8)
-        self._cached_gripper_mesh_left = pyrender.Mesh.from_trimesh(left_gripper_mesh, smooth=True)
+        left_system_mesh = trimesh.load(left_system_path)
+        left_system_mesh.apply_scale(0.001)
+        left_system_mesh.visual.vertex_colors = np.array([180, 180, 180, 255], dtype=np.uint8)
+        self._cached_gripper_mesh_left = pyrender.Mesh.from_trimesh(left_system_mesh, smooth=True)
 
-        if right_system_path:
-            right_gripper_mesh = trimesh.load(right_system_path)
-            right_gripper_mesh.apply_scale(0.001)
-            mirror = np.eye(4)
-            mirror[1, 1] = -1
-            right_gripper_mesh.apply_transform(mirror)
-            right_gripper_mesh.visual.vertex_colors = np.array([180, 180, 180, 255], dtype=np.uint8)
-            self._cached_gripper_mesh_right = pyrender.Mesh.from_trimesh(right_gripper_mesh, smooth=True)
-        else:
-            self._cached_gripper_mesh_right = None
+        right_system_mesh = trimesh.load(right_system_path)
+        right_system_mesh.apply_scale(0.001)
+        right_system_mesh.visual.vertex_colors = np.array([180, 180, 180, 255], dtype=np.uint8)
+        self._cached_gripper_mesh_right = pyrender.Mesh.from_trimesh(right_system_mesh, smooth=True)
+
 
         self._cached_controller_meshes = {
             0: _quest_controller_mesh(is_left=False),
@@ -270,9 +264,8 @@ class Enhanced3DVisualizer(CombinedVisualizer):
                 self._world_dynamic_nodes.append(scene.add(self._cached_axis_mesh, pose=frame_pose))
 
             if self._show_controller_mesh:
-                gripper_mesh = self._cached_gripper_mesh_left if r == 0 else (self._cached_gripper_mesh_right or self._cached_gripper_mesh_left)
-                if gripper_mesh:
-                    self._world_dynamic_nodes.append(scene.add(gripper_mesh, pose=frame_pose))
+                gripper_mesh = self._cached_gripper_mesh_left if r == 0 else self._cached_gripper_mesh_right
+                self._world_dynamic_nodes.append(scene.add(gripper_mesh, pose=frame_pose))
 
             gripper = self.data[prefix].get('gripper', [])
             if gripper and current_idx < len(gripper):
