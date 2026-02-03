@@ -564,47 +564,81 @@ class Enhanced3DVisualizer(CombinedVisualizer):
                     # Debug: print if calibration not found
                     print(f"⚠️  Warning: No calibration found for robot {r}, gripper_base axes not shown")
 
+            # Render the gripper/controller mesh at gripper_base pose (not raw quest pose)
             if self._show_controller_mesh:
                 gripper_mesh = self._cached_gripper_mesh_left if r == 0 else self._cached_gripper_mesh_right
-                self._world_dynamic_nodes.append(scene.add(gripper_mesh, pose=frame_pose))
+                
+                # Get calibration to find gripper_base pose
+                calib = self.finger_calibrations.get(r) if getattr(self, "finger_calibrations", None) else None
+                if calib:
+                    transform_quest_to_gripper_base = calib.get('quest_to_gripper_base', np.eye(4))
+                    gripper_base_pose = frame_pose @ transform_quest_to_gripper_base
+                    self._world_dynamic_nodes.append(scene.add(gripper_mesh, pose=gripper_base_pose))
+                else:
+                    # Fallback to raw quest pose if no calibration
+                    self._world_dynamic_nodes.append(scene.add(gripper_mesh, pose=frame_pose))
 
             gripper = self.data[prefix].get('gripper', [])
             if gripper and current_idx < len(gripper):
                 # Get calibration for this specific robot
                 calib = self.finger_calibrations.get(r) if getattr(self, "finger_calibrations", None) else None
                 if calib:
-                    center_pose, left_pose, right_pose = _finger_poses_from_width(
+                    # _finger_poses_from_width returns:
+                    # - quest_to_gripper_base: transform from quest to gripper_base
+                    # - gripper_base_to_left: transform from gripper_base to left finger
+                    # - gripper_base_to_right: transform from gripper_base to right finger
+                    quest_to_gripper_base, gripper_base_to_left, gripper_base_to_right = _finger_poses_from_width(
                         float(gripper[current_idx]),
                         calib,
                     )
+                    
+                    # DEBUG: Print transformation chain (only once per robot)
+                    if not hasattr(self, '_debug_printed'):
+                        self._debug_printed = set()
+                    if r not in self._debug_printed:
+                        print(f"\n🔍 DEBUG Robot{r} Transform Chain:")
+                        print(f"  frame_pose (quest in world) translation: {frame_pose[:3, 3]}")
+                        print(f"  quest_to_gripper_base translation: {quest_to_gripper_base[:3, 3]}")
+                        print(f"  gripper_base_to_left translation: {gripper_base_to_left[:3, 3]}")
+                        print(f"  gripper_base_to_right translation: {gripper_base_to_right[:3, 3]}")
+                        self._debug_printed.add(r)
+                    
+                    # Compute gripper_base pose in world frame
+                    gripper_base_pose = frame_pose @ quest_to_gripper_base
+                    # Compute finger poses in world frame
+                    left_world_pose = gripper_base_pose @ gripper_base_to_left
+                    right_world_pose = gripper_base_pose @ gripper_base_to_right
+
                 else:
                     grip_width = float(gripper[current_idx])
                     offset = grip_width / 2.0
-                    center_pose = np.eye(4)
-                    center_pose[:3, :3] = Rotation.from_euler('x', 90, degrees=True).as_matrix()
-                    center_pose[:3, 3] = [0.05, 0.0, -0.04]
-                    left_pose = np.eye(4)
-                    right_pose = np.eye(4)
-                    left_pose[:3, :3] = center_pose[:3, :3]
-                    right_pose[:3, :3] = center_pose[:3, :3]
-                    left_pose[:3, 3] = [0.05, - (offset - 0.01), -0.04]
-                    right_pose[:3, 3] = [0.05, (offset - 0.01), -0.04]
+                    quest_to_gripper_base = np.eye(4)
+                    quest_to_gripper_base[:3, :3] = Rotation.from_euler('x', 90, degrees=True).as_matrix()
+                    quest_to_gripper_base[:3, 3] = [0.05, 0.0, -0.04]
+                    gripper_base_to_left = np.eye(4)
+                    gripper_base_to_right = np.eye(4)
+                    gripper_base_to_left[:3, 3] = [0.0, - (offset - 0.01), 0.0]
+                    gripper_base_to_right[:3, 3] = [0.0, (offset - 0.01), 0.0]
+                    # Compute world poses
+                    gripper_base_pose = frame_pose @ quest_to_gripper_base
+                    left_world_pose = gripper_base_pose @ gripper_base_to_left
+                    right_world_pose = gripper_base_pose @ gripper_base_to_right
 
                 if self._show_claw_finger_mesh:
                     # Use separate left/right finger meshes if available
                     if self._cached_left_finger_mesh is not None and self._cached_right_finger_mesh is not None:
-                        self._world_dynamic_nodes.append(scene.add(self._cached_left_finger_mesh, pose=frame_pose @ left_pose))
-                        self._world_dynamic_nodes.append(scene.add(self._cached_right_finger_mesh, pose=frame_pose @ right_pose))
+                        self._world_dynamic_nodes.append(scene.add(self._cached_left_finger_mesh, pose=left_world_pose))
+                        self._world_dynamic_nodes.append(scene.add(self._cached_right_finger_mesh, pose=right_world_pose))
                     elif self._cached_finger_mesh is not None:
                         # Fallback to legacy single mesh
-                        self._world_dynamic_nodes.append(scene.add(self._cached_finger_mesh, pose=frame_pose @ left_pose))
-                        self._world_dynamic_nodes.append(scene.add(self._cached_finger_mesh, pose=frame_pose @ right_pose))
+                        self._world_dynamic_nodes.append(scene.add(self._cached_finger_mesh, pose=left_world_pose))
+                        self._world_dynamic_nodes.append(scene.add(self._cached_finger_mesh, pose=right_world_pose))
 
                 if self._show_finger_axes:
                     axis_mesh = self._cached_axis_mesh or _axis_mesh(size=self._gripper_axis_size)
-                    self._world_dynamic_nodes.append(scene.add(axis_mesh, pose=frame_pose @ center_pose))
-                    self._world_dynamic_nodes.append(scene.add(axis_mesh, pose=frame_pose @ left_pose))
-                    self._world_dynamic_nodes.append(scene.add(axis_mesh, pose=frame_pose @ right_pose))
+                    self._world_dynamic_nodes.append(scene.add(axis_mesh, pose=gripper_base_pose))
+                    self._world_dynamic_nodes.append(scene.add(axis_mesh, pose=left_world_pose))
+                    self._world_dynamic_nodes.append(scene.add(axis_mesh, pose=right_world_pose))
 
         color_img, _ = self.renderers['world'].render(scene, flags=RenderFlags.RGBA)
         return color_img[:, :, :3]

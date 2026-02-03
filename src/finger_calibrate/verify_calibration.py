@@ -3,19 +3,15 @@
 
 This script loads calibration results and displays the reconstructed gripper
 alongside the original assembled mesh for visual comparison.
-
-Interactive mode allows manual adjustment of transforms with keyboard controls.
 """
 
 import argparse
 import json
 import os
 import sys
-import copy
 
 import numpy as np
 import trimesh
-from scipy.spatial.transform import Rotation as R
 
 
 def _load_calibration(json_path):
@@ -101,172 +97,6 @@ def _thick_axis_mesh(scale=0.1):
     return trimesh.util.concatenate([x, y, z])
 
 
-class InteractiveCalibrationEditor:
-    """Interactive editor for manual calibration adjustments."""
-    
-    def __init__(self, calibration_data, json_path):
-        """Initialize the editor with calibration data.
-        
-        Args:
-            calibration_data: Dictionary containing calibration transforms
-            json_path: Path to the calibration JSON file
-        """
-        self.original_data = copy.deepcopy(calibration_data)
-        self.data = calibration_data
-        self.json_path = json_path
-        
-        # Editable transforms (stored as 4x4 matrices)
-        self.t_quest_to_gb = np.array(calibration_data["transform_quest_to_gripper_base"], dtype=np.float64)
-        self.t_gb_to_left = np.array(calibration_data["transform_gripper_base_to_left_finger"], dtype=np.float64)
-        self.t_gb_to_right = np.array(calibration_data["transform_gripper_base_to_right_finger"], dtype=np.float64)
-        
-        # Current selection: 'gripper_base', 'left_finger', 'right_finger'
-        self.selected = 'gripper_base'
-        
-        # Step sizes for adjustments
-        self.translation_step = 1.0  # mm
-        self.rotation_step = 1.0  # degrees
-        
-        self.modified = False
-        
-    def get_selected_transform(self):
-        """Get the transform for the currently selected component."""
-        if self.selected == 'gripper_base':
-            return self.t_quest_to_gb
-        elif self.selected == 'left_finger':
-            return self.t_gb_to_left
-        elif self.selected == 'right_finger':
-            return self.t_gb_to_right
-        return np.eye(4)
-    
-    def set_selected_transform(self, T):
-        """Set the transform for the currently selected component."""
-        if self.selected == 'gripper_base':
-            self.t_quest_to_gb = T
-        elif self.selected == 'left_finger':
-            self.t_gb_to_left = T
-        elif self.selected == 'right_finger':
-            self.t_gb_to_right = T
-        self.modified = True
-    
-    def adjust_translation(self, axis, direction):
-        """Adjust translation along axis (0=x, 1=y, 2=z), direction (+1 or -1)."""
-        T = self.get_selected_transform()
-        delta = np.zeros(3)
-        delta[axis] = direction * self.translation_step
-        T[:3, 3] += delta
-        self.set_selected_transform(T)
-        print(f"  {self.selected}: Translated {['X','Y','Z'][axis]} by {direction * self.translation_step:.2f} mm")
-    
-    def adjust_rotation(self, axis, direction):
-        """Adjust rotation around axis (0=x, 1=y, 2=z), direction (+1 or -1)."""
-        T = self.get_selected_transform()
-        angle_rad = np.radians(direction * self.rotation_step)
-        
-        # Create rotation matrix around specified axis
-        rot_vec = np.zeros(3)
-        rot_vec[axis] = angle_rad
-        rot_mat = R.from_rotvec(rot_vec).as_matrix()
-        
-        # Apply rotation to existing transform
-        T[:3, :3] = T[:3, :3] @ rot_mat
-        
-        self.set_selected_transform(T)
-        print(f"  {self.selected}: Rotated {['X','Y','Z'][axis]} by {direction * self.rotation_step:.1f} degrees")
-    
-    def cycle_selection(self):
-        """Cycle through selectable components."""
-        options = ['gripper_base', 'left_finger', 'right_finger']
-        current_idx = options.index(self.selected)
-        self.selected = options[(current_idx + 1) % len(options)]
-        print(f"  Selected: {self.selected}")
-    
-    def increase_step_size(self):
-        """Increase adjustment step sizes."""
-        self.translation_step *= 2
-        self.rotation_step *= 2
-        print(f"  Step size: translation={self.translation_step:.2f} mm, rotation={self.rotation_step:.1f} deg")
-    
-    def decrease_step_size(self):
-        """Decrease adjustment step sizes."""
-        self.translation_step = max(0.1, self.translation_step / 2)
-        self.rotation_step = max(0.1, self.rotation_step / 2)
-        print(f"  Step size: translation={self.translation_step:.2f} mm, rotation={self.rotation_step:.1f} deg")
-    
-    def reset(self):
-        """Reset to original calibration."""
-        self.t_quest_to_gb = np.array(self.original_data["transform_quest_to_gripper_base"], dtype=np.float64)
-        self.t_gb_to_left = np.array(self.original_data["transform_gripper_base_to_left_finger"], dtype=np.float64)
-        self.t_gb_to_right = np.array(self.original_data["transform_gripper_base_to_right_finger"], dtype=np.float64)
-        self.modified = False
-        print("  Reset to original calibration")
-    
-    def save(self, force=False):
-        """Save modified calibration to file.
-        
-        Args:
-            force: If True, skip confirmation prompt
-        
-        Returns:
-            bool: True if saved, False otherwise
-        """
-        if not self.modified and not force:
-            print("  No modifications to save")
-            return False
-        
-        if not force:
-            response = input(f"\n  Overwrite calibration file? ({self.json_path}) [y/N]: ").strip().lower()
-            if response not in ['y', 'yes']:
-                print("  Save cancelled")
-                return False
-        
-        # Update data with modified transforms
-        self.data["transform_quest_to_gripper_base"] = self.t_quest_to_gb.tolist()
-        self.data["transform_gripper_base_to_left_finger"] = self.t_gb_to_left.tolist()
-        self.data["transform_gripper_base_to_right_finger"] = self.t_gb_to_right.tolist()
-        
-        # Write to file
-        try:
-            with open(self.json_path, 'w', encoding='utf-8') as f:
-                json.dump(self.data, f, indent=2)
-            print(f"  ✓ Saved to {self.json_path}")
-            self.modified = False
-            return True
-        except Exception as e:
-            print(f"  ✗ Failed to save: {e}")
-            return False
-    
-    def print_help(self):
-        """Print keyboard controls."""
-        print("\n" + "="*60)
-        print("  INTERACTIVE MODE - Keyboard Controls")
-        print("="*60)
-        print("  Selection:")
-        print("    TAB         - Cycle through components (gripper_base/left/right)")
-        print()
-        print("  Translation (mm):")
-        print("    W/S         - Move +/- X")
-        print("    A/D         - Move +/- Y") 
-        print("    Q/E         - Move +/- Z")
-        print()
-        print("  Rotation (degrees):")
-        print("    I/K         - Rotate around X")
-        print("    J/L         - Rotate around Y")
-        print("    U/O         - Rotate around Z")
-        print()
-        print("  Step size:")
-        print("    +/-         - Increase/decrease step size")
-        print()
-        print("  Actions:")
-        print("    R           - Reset to original calibration")
-        print("    ENTER       - Save calibration to file")
-        print("    ESC/H       - Show this help")
-        print("="*60)
-        print(f"  Current: {self.selected}")
-        print(f"  Step: translation={self.translation_step:.2f} mm, rotation={self.rotation_step:.1f} deg")
-        print("="*60 + "\n")
-
-
 def main():
     parser = argparse.ArgumentParser(
         description="Verify finger calibration by visualizing the reassembled gripper.",
@@ -284,9 +114,6 @@ Examples:
   
   # Show coordinate axes
   python verify_calibration.py --show-axes
-  
-  # Interactive mode for manual adjustments
-  python verify_calibration.py --interactive
 """
     )
     parser.add_argument(
@@ -314,11 +141,6 @@ Examples:
         "--no-base",
         action="store_true",
         help="Hide the no_finger base mesh"
-    )
-    parser.add_argument(
-        "--interactive",
-        action="store_true",
-        help="Enable interactive mode for manual transform adjustments"
     )
     args = parser.parse_args()
 
@@ -532,150 +354,7 @@ Examples:
         print("    Right finger (RGB)")
     print("="*60)
     
-    # Interactive mode for manual adjustments
-    if args.interactive:
-        print("\n  ⚠️  INTERACTIVE MODE ENABLED")
-        print("  Note: Trimesh viewer doesn't support keyboard input.")
-        print("  Use the console to make adjustments, then close the viewer to see changes.")
-        print("  Type 'help' for available commands.\n")
-        
-        editor = InteractiveCalibrationEditor(data, args.json)
-        editor.print_help()
-        
-        # Interactive loop
-        while True:
-            # Show current state
-            scene.show()
-            
-            # Get user command
-            print("\nEnter command (or 'help' for list, 'quit' to exit):")
-            cmd = input("> ").strip().lower()
-            
-            if cmd in ['quit', 'q', 'exit']:
-                if editor.modified:
-                    save_choice = input("Save changes before exiting? [y/N]: ").strip().lower()
-                    if save_choice in ['y', 'yes']:
-                        editor.save()
-                break
-            
-            elif cmd == 'help' or cmd == 'h':
-                editor.print_help()
-                
-            elif cmd == 'tab':
-                editor.cycle_selection()
-                
-            elif cmd in ['w', 's']:
-                direction = 1 if cmd == 'w' else -1
-                editor.adjust_translation(0, direction)
-                
-            elif cmd in ['a', 'd']:
-                direction = -1 if cmd == 'a' else 1
-                editor.adjust_translation(1, direction)
-                
-            elif cmd in ['q', 'e']:
-                direction = 1 if cmd == 'q' else -1
-                editor.adjust_translation(2, direction)
-                
-            elif cmd in ['i', 'k']:
-                direction = 1 if cmd == 'i' else -1
-                editor.adjust_rotation(0, direction)
-                
-            elif cmd in ['j', 'l']:
-                direction = -1 if cmd == 'j' else 1
-                editor.adjust_rotation(1, direction)
-                
-            elif cmd in ['u', 'o']:
-                direction = 1 if cmd == 'u' else -1
-                editor.adjust_rotation(2, direction)
-                
-            elif cmd in ['+', '=']:
-                editor.increase_step_size()
-                
-            elif cmd in ['-', '_']:
-                editor.decrease_step_size()
-                
-            elif cmd == 'r':
-                editor.reset()
-                
-            elif cmd in ['save', 'enter', '']:
-                editor.save()
-                
-            else:
-                print(f"  Unknown command: '{cmd}'. Type 'help' for available commands.")
-                continue
-            
-            # Rebuild scene with updated transforms
-            scene = trimesh.Scene()
-            
-            # Recompute transforms with potentially modified values
-            t_quest_to_gripper_base = editor.t_quest_to_gb
-            t_gb_to_left = editor.t_gb_to_left
-            t_gb_to_right = editor.t_gb_to_right
-            
-            # Recompute full transforms
-            t_quest_to_left = t_quest_to_gripper_base @ t_gb_to_left
-            t_quest_to_right = t_quest_to_gripper_base @ t_gb_to_right
-            
-            # Rebuild the scene with updated transforms
-            if t_quest_to_assem is not None and assem is not None:
-                quest_in_assem = quest.copy()
-                quest_in_assem.apply_transform(t_quest_to_assem)
-                
-                left_mesh = left_finger.copy()
-                left_mesh.apply_transform(t_quest_to_assem @ t_quest_to_left)
-                right_mesh = right_finger.copy()
-                right_mesh.apply_transform(t_quest_to_assem @ t_quest_to_right)
-                
-                axis_quest = t_quest_to_assem
-                axis_gripper_base = t_quest_to_assem @ t_quest_to_gripper_base
-                axis_left = t_quest_to_assem @ t_quest_to_left
-                axis_right = t_quest_to_assem @ t_quest_to_right
-            else:
-                quest_in_assem = quest.copy()
-                
-                left_mesh = left_finger.copy()
-                left_mesh.apply_transform(t_quest_to_left)
-                right_mesh = right_finger.copy()
-                right_mesh.apply_transform(t_quest_to_right)
-                
-                axis_quest = np.eye(4)
-                axis_gripper_base = t_quest_to_gripper_base
-                axis_left = t_quest_to_left
-                axis_right = t_quest_to_right
-            
-            # Rebuild scene geometries
-            if not args.no_base:
-                scene.add_geometry(_colorize(quest_in_assem, [0.7, 0.7, 0.7, 0.9]), node_name="quest_base")
-            
-            if assem is not None:
-                scene.add_geometry(_colorize(assem, [0.2, 0.6, 0.9, 0.25]), node_name="assem_reference")
-            
-            # Highlight selected component
-            if editor.selected == 'left_finger':
-                left_color = [1.0, 0.5, 0.5, 0.95]  # Brighter red when selected
-                right_color = [0.3, 0.9, 0.3, 0.95]
-            elif editor.selected == 'right_finger':
-                left_color = [0.9, 0.3, 0.3, 0.95]
-                right_color = [0.5, 1.0, 0.5, 0.95]  # Brighter green when selected
-            else:  # gripper_base selected
-                left_color = [0.9, 0.3, 0.3, 0.95]
-                right_color = [0.3, 0.9, 0.3, 0.95]
-            
-            scene.add_geometry(_colorize(left_mesh, left_color), node_name="finger_left")
-            scene.add_geometry(_colorize(right_mesh, right_color), node_name="finger_right")
-            
-            if args.show_axes:
-                axis_scale = float(max(quest.extents)) * 0.15 if hasattr(quest, "extents") else 0.1
-                axis_scale = max(axis_scale, 0.02)
-                axis_mesh = _thick_axis_mesh(scale=axis_scale)
-                
-                scene.add_geometry(axis_mesh.copy(), transform=axis_quest, node_name="axis_quest_origin")
-                scene.add_geometry(axis_mesh.copy(), transform=axis_gripper_base, node_name="axis_gripper_base")
-                scene.add_geometry(axis_mesh.copy(), transform=axis_left, node_name="axis_left_finger")
-                scene.add_geometry(axis_mesh.copy(), transform=axis_right, node_name="axis_right_finger")
-    else:
-        # Non-interactive mode - just show once
-        scene.show()
+    scene.show()
     
     print("\n  ✓ Verification complete")
 

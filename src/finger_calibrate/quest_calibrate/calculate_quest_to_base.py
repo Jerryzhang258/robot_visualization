@@ -335,6 +335,10 @@ def main():
     X_mat = X.as_matrix()
     eul_deg = euler_xyz_deg_from_R(X.R)
 
+    # take inverse of X
+    X_inv = X.inv()
+    X_inv_mat = X_inv.as_matrix()
+
     print("\n" + "="*60)
     print("Refined ^EE T_Q (4x4), translation in mm:")
     print(X_mat)
@@ -345,6 +349,15 @@ def main():
     print("\nRefined translation (mm):")
     print(X.t.tolist())
     print("="*60)
+
+    print("Inverse ^EE T_Q (4x4), translation in mm:")
+    print(X_inv_mat)
+    print("\nInverse rotation matrix:")
+    print(X_inv.R)
+    print("\nInverse euler_xyz_deg:")
+    print(euler_xyz_deg_from_R(X_inv.R).tolist())
+    print("\nInverse translation (mm):")
+    print(X_inv.t.tolist())
 
 
 if __name__ == "__main__":

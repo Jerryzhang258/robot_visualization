@@ -178,6 +178,47 @@ The calibration produces:
 
 ## Advanced Usage
 
+### Manual Initial Transform (for Large Mesh Offsets)
+
+When meshes have large centroid offsets (>100mm), automatic alignment may fail. You can provide an initial transformation guess:
+
+```bash
+# Using calibrate_finger_separate.py with initial transform
+python src/finger_calibrate/calibrate_finger_separate.py \
+    --no-finger src/meshes/left_no_finger.STL \
+    --left-finger src/meshes/left_finger.STL \
+    --right-finger src/meshes/right_finger.STL \
+    --assem src/meshes/left_assem.STL \
+    --out src/finger_calibrate/output \
+    --initial-transform src/finger_calibrate/output/initial_transform.json
+
+```
+
+**Transform Format** (see `example_initial_transform.json`):
+```json
+{
+  "transform": [
+    [1.0, 0.0, 0.0, 100.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0]
+  ]
+}
+```
+
+This is a 4x4 homogeneous transformation matrix:
+- Top-left 3x3: Rotation matrix (must be orthonormal)
+- Right column (tx, ty, tz): Translation in millimeters
+- Bottom row: Always [0, 0, 0, 1]
+
+**How to find the initial transform:**
+1. Open both meshes in a 3D viewer (e.g., MeshLab, Blender)
+2. Manually align the quest mesh to the assembled mesh
+3. Record the rotation and translation applied
+4. Format as a JSON file with the 4x4 matrix
+
+**Note:** The initial transform is used as a starting point for ICP refinement. It doesn't need to be perfect, but should get the meshes roughly aligned (within ~20mm).
+
 ### Batch Processing
 
 ```bash

@@ -580,8 +580,9 @@ def _load_finger_calibration(calibration_path=None):
     t_quest_to_right = _fix_rotation(t_quest_to_right)
     t_center = _fix_rotation(t_center)
 
-    # Compute opening axis
-    delta = t_quest_to_right[:3, 3] - t_quest_to_left[:3, 3]
+    # Compute opening axis IN GRIPPER_BASE FRAME (not quest frame!)
+    # The opening axis should be computed from gripper_base-relative finger positions
+    delta = t_gripper_base_to_right[:3, 3] - t_gripper_base_to_left[:3, 3]
     norm = np.linalg.norm(delta)
     if norm < 1e-6:
         axis = np.array([0.0, 1.0, 0.0], dtype=np.float64)
@@ -673,7 +674,8 @@ def _finger_poses_from_width(gripper_width, calibration):
         calibration: Calibration dict from _load_finger_calibration
         
     Returns:
-        (quest_to_gripper_base, quest_to_left_finger, quest_to_right_finger): Transform matrices
+        (quest_to_gripper_base, gripper_base_to_left_finger, gripper_base_to_right_finger): Transform matrices
+        Note: Returns transforms relative to gripper_base, not quest!
     """
     # Get transforms from calibration
     t_quest_to_gripper_base = calibration["quest_to_gripper_base"].copy()
@@ -682,8 +684,16 @@ def _finger_poses_from_width(gripper_width, calibration):
     axis = calibration["open_axis"]
     half = float(gripper_width) * 0.5
     
-    # Compute gripper_base position in quest frame
-    gripper_base_pos = t_quest_to_gripper_base[:3, 3]
+    # DEBUG: Print calibration data (only once)
+    if not hasattr(_finger_poses_from_width, '_debug_printed'):
+        print(f"\n📋 _finger_poses_from_width DEBUG:")
+        print(f"  gripper_width: {gripper_width} m")
+        print(f"  half: {half} m")
+        print(f"  Calibration t_quest_to_gripper_base translation: {t_quest_to_gripper_base[:3, 3]}")
+        print(f"  Calibration t_gripper_base_to_left translation: {t_gripper_base_to_left[:3, 3]}")
+        print(f"  Calibration t_gripper_base_to_right translation: {t_gripper_base_to_right[:3, 3]}")
+        print(f"  open_axis: {axis}")
+        _finger_poses_from_width._debug_printed = True
     
     # Get calibrated finger positions in gripper_base frame
     left_calib_pos_gb = t_gripper_base_to_left[:3, 3]
@@ -692,6 +702,12 @@ def _finger_poses_from_width(gripper_width, calibration):
     # Compute how far each finger is from gripper_base origin along the opening axis
     left_calib_offset = np.dot(left_calib_pos_gb, axis)
     right_calib_offset = np.dot(right_calib_pos_gb, axis)
+    
+    # DEBUG: Print offsets
+    if not hasattr(_finger_poses_from_width, '_debug_printed2'):
+        print(f"  left_calib_offset: {left_calib_offset}")
+        print(f"  right_calib_offset: {right_calib_offset}")
+        _finger_poses_from_width._debug_printed2 = True
     
     # The open axis points from left to right, so:
     # - left finger offset is typically negative
@@ -707,9 +723,21 @@ def _finger_poses_from_width(gripper_width, calibration):
     else:
         scale = 1.0
     
+    # DEBUG: Print scale
+    if not hasattr(_finger_poses_from_width, '_debug_printed3'):
+        print(f"  calib_half_width: {calib_half_width}")
+        print(f"  scale: {scale}")
+        _finger_poses_from_width._debug_printed3 = True
+    
     # New finger positions in gripper_base frame: move along axis proportionally
     left_pos_gb = left_calib_pos_gb + (left_calib_offset * (scale - 1.0)) * axis
     right_pos_gb = right_calib_pos_gb + (right_calib_offset * (scale - 1.0)) * axis
+    
+    # DEBUG: Print adjusted positions
+    if not hasattr(_finger_poses_from_width, '_debug_printed4'):
+        print(f"  Adjusted left_pos_gb: {left_pos_gb}")
+        print(f"  Adjusted right_pos_gb: {right_pos_gb}")
+        _finger_poses_from_width._debug_printed4 = True
     
     # Use the calibrated rotations directly
     left_rot = t_gripper_base_to_left[:3, :3]
@@ -723,11 +751,8 @@ def _finger_poses_from_width(gripper_width, calibration):
     t_gb_to_left[:3, 3] = left_pos_gb
     t_gb_to_right[:3, 3] = right_pos_gb
     
-    # Transform to quest frame: quest -> gripper_base -> finger
-    t_quest_to_left = t_quest_to_gripper_base @ t_gb_to_left
-    t_quest_to_right = t_quest_to_gripper_base @ t_gb_to_right
-    
-    return t_quest_to_gripper_base, t_quest_to_left, t_quest_to_right
+    # Return transforms relative to gripper_base (NOT quest)
+    return t_quest_to_gripper_base, t_gb_to_left, t_gb_to_right
 
 class CombinedVisualizer:
     def __init__(self, replay_buffer, episodes, record_mode=False, record_episode=0, 

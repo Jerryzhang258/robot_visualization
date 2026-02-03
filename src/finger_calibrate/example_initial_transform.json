@@ -1,0 +1,44 @@
+{
+  "transform": [
+    [1.0, 0.0, 0.0, 100.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0]
+  ],
+  "_comment": "This is a 4x4 homogeneous transformation matrix in the format:",
+  "_format": [
+    "[ R11  R12  R13  tx ]",
+    "[ R21  R22  R23  ty ]",
+    "[ R31  R32  R33  tz ]",
+    "[  0    0    0    1 ]"
+  ],
+  "_explanation": {
+    "R (3x3 upper-left)": "Rotation matrix - must be orthonormal (columns/rows are unit vectors, perpendicular to each other)",
+    "t (3x1 rightmost column)": "Translation vector [tx, ty, tz] in millimeters",
+    "bottom_row": "Always [0, 0, 0, 1] for homogeneous coordinates",
+    "usage": "python calibrate_finger_separate.py --quest-stl meshes/right_no_finger.STL --assem-stl meshes/right_assem.STL --initial-transform example_initial_transform.json"
+  },
+  "_examples": {
+    "identity": "No rotation or translation - meshes already aligned",
+    "translation_only": "Move quest mesh 100mm in X direction (tx=100), as shown above",
+    "rotation_90_Z": {
+      "transform": [
+        [0.0, -1.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0]
+      ],
+      "description": "Rotate 90 degrees counterclockwise around Z-axis"
+    },
+    "rotation_and_translation": {
+      "transform": [
+        [0.0, -1.0, 0.0, 100.0],
+        [1.0, 0.0, 0.0, 50.0],
+        [0.0, 0.0, 1.0, -25.0],
+        [0.0, 0.0, 0.0, 1.0]
+      ],
+      "description": "Rotate 90 degrees around Z + translate [100, 50, -25] mm"
+    }
+  },
+  "_note": "The 'transform' key can also be omitted and the array provided directly at the root level"
+}
