@@ -505,12 +505,16 @@ def _load_finger_mesh():
 def _load_finger_calibration(calibration_path=None):
     """Load finger calibration from JSON file.
     
+    Supports new transform hierarchy: quest -> gripper_base -> fingers
+    
     Args:
         calibration_path: Path to calibration JSON file. If None, uses FINGER_CALIBRATION_JSON.
     
     Returns:
-        Calibration dict with keys: left_to_no_finger, right_to_no_finger, 
-        center_to_no_finger, open_axis_no_finger, tip_axis, left_finger_mesh, right_finger_mesh
+        Calibration dict with keys: quest_to_gripper_base, gripper_base_to_left_finger,
+        gripper_base_to_right_finger, center_pose, open_axis, tip_axis, etc.
+        
+        Also includes legacy keys for backward compatibility: left_to_quest, right_to_quest
     """
     path = calibration_path if calibration_path else FINGER_CALIBRATION_JSON
     if not os.path.exists(path):
@@ -520,34 +524,64 @@ def _load_finger_calibration(calibration_path=None):
 
     tip_axis = data.get("tip_axis", "z")
     
-    # Load transforms based on new or old JSON format
-    if "transform_left_finger_to_no_finger" in data:
-        # New format with separate left/right finger transforms
-        t_left = np.array(data["transform_left_finger_to_no_finger"], dtype=np.float64)
-        t_right = np.array(data["transform_right_finger_to_no_finger"], dtype=np.float64)
-    elif "transform_finger_left_to_no_finger" in data:
-        # Old format
-        t_left = np.array(data["transform_finger_left_to_no_finger"], dtype=np.float64)
-        t_right = np.array(data["transform_finger_right_to_no_finger"], dtype=np.float64)
+    # Try to load new format first: quest -> gripper_base -> fingers
+    if "transform_quest_to_gripper_base" in data:
+        # New hierarchical format
+        t_quest_to_gripper_base = np.array(data["transform_quest_to_gripper_base"], dtype=np.float64)
+        t_gripper_base_to_left = np.array(data["transform_gripper_base_to_left_finger"], dtype=np.float64)
+        t_gripper_base_to_right = np.array(data["transform_gripper_base_to_right_finger"], dtype=np.float64)
+        
+        # Compute full transforms: quest -> finger
+        t_quest_to_left = t_quest_to_gripper_base @ t_gripper_base_to_left
+        t_quest_to_right = t_quest_to_gripper_base @ t_gripper_base_to_right
+    # Fallback to old formats for backward compatibility
+    elif "transform_left_finger_to_no_finger" in data or "transform_finger_left_to_no_finger" in data:
+        # Old format: no_finger (quest) -> fingers directly
+        if "transform_left_finger_to_no_finger" in data:
+            t_quest_to_left = np.array(data["transform_left_finger_to_no_finger"], dtype=np.float64)
+            t_quest_to_right = np.array(data["transform_right_finger_to_no_finger"], dtype=np.float64)
+        else:
+            t_quest_to_left = np.array(data["transform_finger_left_to_no_finger"], dtype=np.float64)
+            t_quest_to_right = np.array(data["transform_finger_right_to_no_finger"], dtype=np.float64)
+        
+        # Compute intermediate gripper_base as identity (not explicitly stored in old format)
+        t_quest_to_gripper_base = np.eye(4)
+        t_gripper_base_to_left = t_quest_to_left.copy()
+        t_gripper_base_to_right = t_quest_to_right.copy()
     else:
-        # Legacy format
-        t_nf_to_assem = np.array(data["transform_no_finger_to_assem"], dtype=np.float64)
+        # Legacy format: uses assem frame
+        t_quest_to_assem = np.array(data["transform_no_finger_to_assem"], dtype=np.float64)
         t_left_assem = np.array(data["transform_finger_left"], dtype=np.float64)
         t_right_assem = np.array(data["transform_finger_right"], dtype=np.float64)
-        t_nf_to_assem_inv = np.linalg.inv(t_nf_to_assem)
-        t_left = t_nf_to_assem_inv @ t_left_assem
-        t_right = t_nf_to_assem_inv @ t_right_assem
+        t_quest_to_assem_inv = np.linalg.inv(t_quest_to_assem)
+        t_quest_to_left = t_quest_to_assem_inv @ t_left_assem
+        t_quest_to_right = t_quest_to_assem_inv @ t_right_assem
+        
+        t_quest_to_gripper_base = np.eye(4)
+        t_gripper_base_to_left = t_quest_to_left.copy()
+        t_gripper_base_to_right = t_quest_to_right.copy()
     
-    t_center = _compute_center_pose(t_left, t_right, tip_axis=tip_axis)
+    # Compute center pose (gripper_base center)
+    t_center = _compute_center_pose(t_quest_to_left, t_quest_to_right, tip_axis=tip_axis)
 
-    t_left = _scale_transform(t_left, FINGER_CALIBRATION_SCALE)
-    t_right = _scale_transform(t_right, FINGER_CALIBRATION_SCALE)
+    # Apply scaling
+    t_quest_to_gripper_base = _scale_transform(t_quest_to_gripper_base, FINGER_CALIBRATION_SCALE)
+    t_gripper_base_to_left = _scale_transform(t_gripper_base_to_left, FINGER_CALIBRATION_SCALE)
+    t_gripper_base_to_right = _scale_transform(t_gripper_base_to_right, FINGER_CALIBRATION_SCALE)
+    t_quest_to_left = _scale_transform(t_quest_to_left, FINGER_CALIBRATION_SCALE)
+    t_quest_to_right = _scale_transform(t_quest_to_right, FINGER_CALIBRATION_SCALE)
     t_center = _scale_transform(t_center, FINGER_CALIBRATION_SCALE)
-    t_left = _fix_rotation(t_left)
-    t_right = _fix_rotation(t_right)
+    
+    # Fix rotations
+    t_quest_to_gripper_base = _fix_rotation(t_quest_to_gripper_base)
+    t_gripper_base_to_left = _fix_rotation(t_gripper_base_to_left)
+    t_gripper_base_to_right = _fix_rotation(t_gripper_base_to_right)
+    t_quest_to_left = _fix_rotation(t_quest_to_left)
+    t_quest_to_right = _fix_rotation(t_quest_to_right)
     t_center = _fix_rotation(t_center)
 
-    delta = t_right[:3, 3] - t_left[:3, 3]
+    # Compute opening axis
+    delta = t_quest_to_right[:3, 3] - t_quest_to_left[:3, 3]
     norm = np.linalg.norm(delta)
     if norm < 1e-6:
         axis = np.array([0.0, 1.0, 0.0], dtype=np.float64)
@@ -578,10 +612,20 @@ def _load_finger_calibration(calibration_path=None):
                 print(f"Warning: Failed to load right finger mesh from {right_finger_path}: {e}")
 
     return {
-        "left_to_no_finger": t_left,
-        "right_to_no_finger": t_right,
-        "center_to_no_finger": t_center,
-        "open_axis_no_finger": axis,
+        # New hierarchy
+        "quest_to_gripper_base": t_quest_to_gripper_base,
+        "gripper_base_to_left_finger": t_gripper_base_to_left,
+        "gripper_base_to_right_finger": t_gripper_base_to_right,
+        "center_pose": t_center,
+        "open_axis": axis,
+        # Legacy keys for backward compatibility
+        "left_to_quest": t_quest_to_left,
+        "right_to_quest": t_quest_to_right,
+        "left_to_no_finger": t_quest_to_left,  # Alias
+        "right_to_no_finger": t_quest_to_right,  # Alias
+        "center_to_no_finger": t_center,  # Alias
+        "open_axis_no_finger": axis,  # Alias
+        # Other data
         "tip_axis": tip_axis,
         "left_finger_mesh": left_finger_mesh,
         "right_finger_mesh": right_finger_mesh,
@@ -619,52 +663,71 @@ def _load_finger_calibrations_per_robot():
 def _finger_poses_from_width(gripper_width, calibration):
     """Compute finger poses given gripper opening width.
     
-    The fingers move along the open_axis, starting from the calibrated center position.
+    Uses new transform hierarchy: quest -> gripper_base -> fingers
+    
+    The fingers move along the open_axis, starting from the calibrated position.
     The rotation of each finger comes from the calibration data directly.
+    
+    Args:
+        gripper_width: Opening width in meters
+        calibration: Calibration dict from _load_finger_calibration
+        
+    Returns:
+        (quest_to_gripper_base, quest_to_left_finger, quest_to_right_finger): Transform matrices
     """
-    center = calibration["center_to_no_finger"].copy()
-    axis = calibration["open_axis_no_finger"]
+    # Get transforms from calibration
+    t_quest_to_gripper_base = calibration["quest_to_gripper_base"].copy()
+    t_gripper_base_to_left = calibration["gripper_base_to_left_finger"]
+    t_gripper_base_to_right = calibration["gripper_base_to_right_finger"]
+    axis = calibration["open_axis"]
     half = float(gripper_width) * 0.5
     
-    # Get the calibrated finger positions and rotations
-    left_calib = calibration["left_to_no_finger"]
-    right_calib = calibration["right_to_no_finger"]
+    # Compute gripper_base position in quest frame
+    gripper_base_pos = t_quest_to_gripper_base[:3, 3]
     
-    # Compute how far each finger is from center in the calibration
-    center_pos = center[:3, 3]
-    left_calib_offset = np.dot(left_calib[:3, 3] - center_pos, axis)
-    right_calib_offset = np.dot(right_calib[:3, 3] - center_pos, axis)
+    # Get calibrated finger positions in gripper_base frame
+    left_calib_pos_gb = t_gripper_base_to_left[:3, 3]
+    right_calib_pos_gb = t_gripper_base_to_right[:3, 3]
+    
+    # Compute how far each finger is from gripper_base origin along the opening axis
+    left_calib_offset = np.dot(left_calib_pos_gb, axis)
+    right_calib_offset = np.dot(right_calib_pos_gb, axis)
     
     # The open axis points from left to right, so:
-    # - left finger is at center_pos + left_offset * axis (left_offset is negative)
-    # - right finger is at center_pos + right_offset * axis (right_offset is positive)
+    # - left finger offset is typically negative
+    # - right finger offset is typically positive
     # When gripper opens, both move outward along the axis
     
     # Compute the calibrated half-width (distance from center to finger at calibration time)
     calib_half_width = (right_calib_offset - left_calib_offset) / 2.0
     
     # Scale factor: how much to move from calibration position
-    # If calib_half_width is ~0, fingers don't move
     if abs(calib_half_width) > 1e-6:
         scale = half / calib_half_width
     else:
         scale = 1.0
     
-    # New finger positions: move along axis proportionally
-    left_pos = center_pos + (left_calib_offset * scale) * axis
-    right_pos = center_pos + (right_calib_offset * scale) * axis
+    # New finger positions in gripper_base frame: move along axis proportionally
+    left_pos_gb = left_calib_pos_gb + (left_calib_offset * (scale - 1.0)) * axis
+    right_pos_gb = right_calib_pos_gb + (right_calib_offset * (scale - 1.0)) * axis
     
     # Use the calibrated rotations directly
-    left_rot = left_calib[:3, :3]
-    right_rot = right_calib[:3, :3]
+    left_rot = t_gripper_base_to_left[:3, :3]
+    right_rot = t_gripper_base_to_right[:3, :3]
 
-    left_pose = np.eye(4)
-    right_pose = np.eye(4)
-    left_pose[:3, :3] = left_rot
-    right_pose[:3, :3] = right_rot
-    left_pose[:3, 3] = left_pos
-    right_pose[:3, 3] = right_pos
-    return center, left_pose, right_pose
+    # Build finger poses in gripper_base frame
+    t_gb_to_left = np.eye(4)
+    t_gb_to_right = np.eye(4)
+    t_gb_to_left[:3, :3] = left_rot
+    t_gb_to_right[:3, :3] = right_rot
+    t_gb_to_left[:3, 3] = left_pos_gb
+    t_gb_to_right[:3, 3] = right_pos_gb
+    
+    # Transform to quest frame: quest -> gripper_base -> finger
+    t_quest_to_left = t_quest_to_gripper_base @ t_gb_to_left
+    t_quest_to_right = t_quest_to_gripper_base @ t_gb_to_right
+    
+    return t_quest_to_gripper_base, t_quest_to_left, t_quest_to_right
 
 class CombinedVisualizer:
     def __init__(self, replay_buffer, episodes, record_mode=False, record_episode=0, 

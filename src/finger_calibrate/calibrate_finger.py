@@ -313,23 +313,23 @@ def _cluster_finger_points(points, verbose=True):
     return left_pts.astype(np.float32), right_pts.astype(np.float32)
 
 
-def _extract_finger_only_points(assem_pts, no_finger_mesh, residual_thresh, verbose=True):
-    """Extract points from assem that are far from no_finger mesh.
+def _extract_finger_only_points(assem_pts, quest_mesh, residual_thresh, verbose=True):
+    """Extract points from assem that are far from quest mesh.
     
     This identifies the finger regions by finding where the assembled mesh
-    differs from the no-finger base, ensuring ICP targets only the actual
+    differs from the quest base, ensuring ICP targets only the actual
     finger geometry and not the base.
     
     Args:
         assem_pts: Points sampled from assembled mesh
-        no_finger_mesh: The no-finger base mesh (already aligned to assem)
+        quest_mesh: The quest base mesh (already aligned to assem)
         residual_thresh: Distance threshold to identify finger regions
         verbose: Print progress info
         
     Returns:
-        finger_only_pts: Points that are far from the no-finger mesh
+        finger_only_pts: Points that are far from the quest mesh
     """
-    dist = _closest_distances(no_finger_mesh, assem_pts)
+    dist = _closest_distances(quest_mesh, assem_pts)
     finger_only_pts = assem_pts[dist > residual_thresh]
     
     if verbose:
@@ -412,7 +412,7 @@ class _FingerSelectViewer(SceneViewer):
             return
 
 
-def _select_left_finger(left_pts, right_pts, no_finger_aligned, assem):
+def _select_left_finger(left_pts, right_pts, quest_aligned, assem):
     """Interactive viewer to let user select which cluster is the left finger.
     
     Displays two point clusters in different colors (red=assumed left, green=assumed right)
@@ -421,7 +421,7 @@ def _select_left_finger(left_pts, right_pts, no_finger_aligned, assem):
     Args:
         left_pts: Points on one side of the split (initially assumed left)
         right_pts: Points on other side of the split (initially assumed right)
-        no_finger_aligned: The aligned no-finger mesh for context
+        quest_aligned: The aligned quest mesh for context
         assem: The assembled mesh for context
         
     Returns:
@@ -445,7 +445,7 @@ def _select_left_finger(left_pts, right_pts, no_finger_aligned, assem):
     
     # Build scene
     scene = trimesh.Scene()
-    scene.add_geometry(_colorize(no_finger_aligned, [0.5, 0.5, 0.5, 0.3]), node_name="base")
+    scene.add_geometry(_colorize(quest_aligned, [0.5, 0.5, 0.5, 0.3]), node_name="quest_base")
     scene.add_geometry(_colorize(assem, [0.2, 0.5, 0.8, 0.15]), node_name="assem")
     scene.add_geometry(left_pc, node_name="left_points")
     scene.add_geometry(right_pc, node_name="right_points")
@@ -1322,10 +1322,10 @@ class _NudgeViewer(SceneViewer):
             ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
             snapshot_path = _write_calibration_result(
                 self.state["save_dir"],
-                self.state["no_finger_path"],
+                self.state["quest_path"],
                 self.state["finger_path"],
                 self.state["assem_path"],
-                self.state["t_nf_to_assem"],
+                self.state["t_quest_to_assem"],
                 self.state["center_pose"] @ self.state["left_rel"],
                 self.state["center_pose"] @ (mirror @ self.state["left_rel"]),
                 self.state["tip_axis"],
@@ -1336,7 +1336,7 @@ class _NudgeViewer(SceneViewer):
                 self.state["residual_thresh"],
                 self.state["split_axis"],
                 self.state["split_value"],
-                self.state["no_finger_mesh"],
+                self.state["quest_mesh"],
                 self.state["finger_mesh"],
                 f"nudge_{ts}",
                 json_name=f"nudge_snapshot_{ts}.json",
@@ -1424,24 +1424,32 @@ class _NudgeViewer(SceneViewer):
         self.flip()
 
 
-def _write_calibration_result(out_dir, no_finger_path, finger_path, assem_path,
-                              t_nf_to_assem, t_finger_left, t_finger_right,
+def _write_calibration_result(out_dir, quest_path, finger_path, assem_path,
+                              t_quest_to_assem, t_finger_left, t_finger_right,
                               tip_axis, symmetric, nudge, samples, icp_iters,
                               residual_thresh, split_axis, split_value,
-                              no_finger_mesh, finger_mesh, suffix,
+                              quest_mesh, finger_mesh, suffix,
                               json_name=None):
     os.makedirs(out_dir, exist_ok=True)
-    t_nf_to_assem_inv = np.linalg.inv(t_nf_to_assem)
-    t_finger_left_to_no_finger = t_nf_to_assem_inv @ t_finger_left
-    t_finger_right_to_no_finger = t_nf_to_assem_inv @ t_finger_right
-    t_finger_base_to_no_finger = t_nf_to_assem_inv @ _compute_center_pose_from_residuals(
-        t_finger_left, np.array([t_finger_left[:3, 3]]), np.array([t_finger_right[:3, 3]]), tip_axis=tip_axis
-    )
+    t_quest_to_assem_inv = np.linalg.inv(t_quest_to_assem)
+    
+    # For backward compatibility, compute old format (quest = no_finger)
+    t_finger_left_to_quest = t_quest_to_assem_inv @ t_finger_left
+    t_finger_right_to_quest = t_quest_to_assem_inv @ t_finger_right
+    
+    # For visualization: quest is the reference frame from the data,
+    # so transform_quest_to_gripper_base is identity
+    t_quest_to_gripper_base = np.eye(4, dtype=np.float64)
+    
+    # Transform fingers directly to gripper_base (which equals quest frame)
+    # So gripper_base_to_finger is the same as quest_to_finger
+    t_gripper_base_to_left_finger = t_finger_left_to_quest.copy()
+    t_gripper_base_to_right_finger = t_finger_right_to_quest.copy()
 
-    no_finger_aligned = no_finger_mesh.copy()
-    no_finger_aligned.apply_transform(t_nf_to_assem)
-    nf_out = os.path.join(out_dir, f"left_no_finger_aligned_{suffix}.stl")
-    no_finger_aligned.export(nf_out)
+    quest_aligned = quest_mesh.copy()
+    quest_aligned.apply_transform(t_quest_to_assem)
+    quest_out = os.path.join(out_dir, f"quest_aligned_{suffix}.stl")
+    quest_aligned.export(quest_out)
 
     left_mesh = finger_mesh.copy()
     left_mesh.apply_transform(t_finger_left)
@@ -1454,7 +1462,7 @@ def _write_calibration_result(out_dir, no_finger_path, finger_path, assem_path,
     right_mesh.export(right_path)
 
     result = {
-        "no_finger_path": no_finger_path,
+        "quest_path": quest_path,
         "finger_path": finger_path,
         "assem_path": assem_path,
         "samples": samples,
@@ -1462,17 +1470,22 @@ def _write_calibration_result(out_dir, no_finger_path, finger_path, assem_path,
         "residual_thresh": residual_thresh,
         "split_axis": split_axis,
         "split_value": split_value,
-        "transform_no_finger_to_assem": t_nf_to_assem.tolist(),
+        "transform_quest_to_assem": t_quest_to_assem.tolist(),
         "transform_finger_left": t_finger_left.tolist(),
         "transform_finger_right": t_finger_right.tolist(),
-        "transform_finger_left_to_no_finger": t_finger_left_to_no_finger.tolist(),
-        "transform_finger_right_to_no_finger": t_finger_right_to_no_finger.tolist(),
-        "transform_finger_base_to_no_finger": t_finger_base_to_no_finger.tolist(),
+        # New hierarchy: quest -> gripper_base -> fingers
+        "transform_quest_to_gripper_base": t_quest_to_gripper_base.tolist(),
+        "transform_gripper_base_to_left_finger": t_gripper_base_to_left_finger.tolist(),
+        "transform_gripper_base_to_right_finger": t_gripper_base_to_right_finger.tolist(),
+        # Backward compatibility (old naming: no_finger = quest)
+        "transform_finger_left_to_no_finger": t_finger_left_to_quest.tolist(),
+        "transform_finger_right_to_no_finger": t_finger_right_to_quest.tolist(),
+        "transform_finger_base_to_no_finger": t_quest_to_gripper_base.tolist(),
         "tip_axis": tip_axis,
         "symmetric": symmetric,
         "nudge": nudge,
         "outputs": {
-            "left_no_finger_aligned": nf_out,
+            "quest_aligned": quest_out,
             "finger_left_aligned": left_path,
             "finger_right_aligned": right_path,
         },
@@ -1483,15 +1496,16 @@ def _write_calibration_result(out_dir, no_finger_path, finger_path, assem_path,
         json.dump(result, f, indent=2)
     return json_path
 
-def _nudge_initial_loop(no_finger_aligned, assem, finger, center_pose, left_rel, inward_axis="x",
+def _nudge_initial_loop(quest_aligned, assem, finger, center_pose, left_rel, inward_axis="x",
                         save_dir="src/finger_calibrate/output", tip_axis="z",
-                        no_finger_path="", finger_path="", assem_path="",
-                        t_nf_to_assem=None, symmetric=True, samples=0,
+                        quest_path="", finger_path="", assem_path="",
+                        t_quest_to_assem=None, symmetric=True, samples=0,
                         icp_iters=0, residual_thresh=0.0, split_axis="y",
                         split_value=0.0, align_inward=True):
     """Interactive nudge loop for adjusting finger positions.
     
     Args:
+        quest_aligned: The quest (gripper base without fingers) mesh aligned to assem
         align_inward: If True, align the finger's inward axis on entry.
                      Set to False when entering nudge after optimization
                      to preserve current positions.
@@ -1529,12 +1543,12 @@ def _nudge_initial_loop(no_finger_aligned, assem, finger, center_pose, left_rel,
     right_tf = center_pose @ mirror @ left_rel
 
     scene = trimesh.Scene()
-    scene.add_geometry(_colorize(no_finger_aligned, [0.7, 0.7, 0.7, 0.9]), node_name="base")
+    scene.add_geometry(_colorize(quest_aligned, [0.7, 0.7, 0.7, 0.9]), node_name="quest_base")
     scene.add_geometry(_colorize(assem, [0.2, 0.6, 0.9, 0.35]), node_name="assem")
     scene.add_geometry(_colorize(finger, [0.9, 0.4, 0.4, 0.95]), node_name="finger_left", transform=left_tf)
     scene.add_geometry(_colorize(finger, [0.4, 0.9, 0.4, 0.95]), node_name="finger_right", transform=right_tf)
     axis_mesh = _thick_axis_mesh(scale=axis_scale)
-    scene.add_geometry(axis_mesh.copy(), node_name="axis_no_finger", transform=_center_pose_for_mesh(no_finger_aligned))
+    scene.add_geometry(axis_mesh.copy(), node_name="axis_quest", transform=_center_pose_for_mesh(quest_aligned))
     scene.add_geometry(axis_mesh.copy(), node_name="axis_assem", transform=_center_pose_for_mesh(assem))
     scene.add_geometry(axis_mesh.copy(), node_name="axis_left", transform=_center_pose_for_mesh(finger, base_tf=left_tf))
     scene.add_geometry(axis_mesh.copy(), node_name="axis_right", transform=_center_pose_for_mesh(finger, base_tf=right_tf))
@@ -1552,17 +1566,17 @@ def _nudge_initial_loop(no_finger_aligned, assem, finger, center_pose, left_rel,
         "finger": finger,
         "save_dir": save_dir,
         "tip_axis": tip_axis,
-        "no_finger_path": no_finger_path,
+        "quest_path": quest_path,
         "finger_path": finger_path,
         "assem_path": assem_path,
-        "t_nf_to_assem": t_nf_to_assem if t_nf_to_assem is not None else np.eye(4),
+        "t_quest_to_assem": t_quest_to_assem if t_quest_to_assem is not None else np.eye(4),
         "symmetric": symmetric,
         "samples": samples,
         "icp_iters": icp_iters,
         "residual_thresh": residual_thresh,
         "split_axis": split_axis,
         "split_value": split_value,
-        "no_finger_mesh": no_finger_aligned,
+        "quest_mesh": quest_aligned,
         "finger_mesh": finger,
     }
     viewer = _NudgeViewer(scene, state)
@@ -1600,8 +1614,8 @@ class _RoundViewer(SceneViewer):
         super().on_key_press(symbol, modifiers)
 
 
-def _pre_optimization_prompt(round_idx, center_pose, left_rel, no_finger_aligned, assem, finger,
-                             out_dir, no_finger_path, finger_path, assem_path, t_nf_to_assem,
+def _pre_optimization_prompt(round_idx, center_pose, left_rel, quest_aligned, assem, finger,
+                             out_dir, quest_path, finger_path, assem_path, t_quest_to_assem,
                              tip_axis, symmetric, samples, icp_iters, residual_thresh,
                              split_axis, split_value):
     """Display current state BEFORE optimization and prompt user.
@@ -1617,7 +1631,7 @@ def _pre_optimization_prompt(round_idx, center_pose, left_rel, no_finger_aligned
     right_tf = center_pose @ (mirror @ left_rel)
     
     round_scene = trimesh.Scene()
-    round_scene.add_geometry(_colorize(no_finger_aligned, [0.7, 0.7, 0.7, 0.6]), node_name="base")
+    round_scene.add_geometry(_colorize(quest_aligned, [0.7, 0.7, 0.7, 0.6]), node_name="quest_base")
     round_scene.add_geometry(_colorize(assem, [0.2, 0.6, 0.9, 0.2]), node_name="assem")
     round_scene.add_geometry(_colorize(finger, [0.9, 0.4, 0.4, 0.95]), node_name="finger_left", transform=left_tf)
     round_scene.add_geometry(_colorize(finger, [0.4, 0.9, 0.4, 0.95]), node_name="finger_right", transform=right_tf)
@@ -1637,10 +1651,10 @@ def _pre_optimization_prompt(round_idx, center_pose, left_rel, no_finger_aligned
         ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
         json_path = _write_calibration_result(
             out_dir,
-            no_finger_path,
+            quest_path,
             finger_path,
             assem_path,
-            t_nf_to_assem,
+            t_quest_to_assem,
             left_tf,
             right_tf,
             tip_axis,
@@ -1651,7 +1665,7 @@ def _pre_optimization_prompt(round_idx, center_pose, left_rel, no_finger_aligned
             residual_thresh,
             split_axis,
             split_value,
-            no_finger_aligned,
+            quest_aligned,
             finger,
             f"pre_opt_r{round_idx}_{ts}",
             json_name="calibration_result.json",
@@ -1662,13 +1676,13 @@ def _pre_optimization_prompt(round_idx, center_pose, left_rel, no_finger_aligned
     return choice
 
 
-def _round_prompt(round_idx, left_tf, right_tf, no_finger_aligned, assem, finger):
+def _round_prompt(round_idx, left_tf, right_tf, quest_aligned, assem, finger):
     """Display optimization round result and prompt user for next action.
     
     Uses interactive viewer with keypress handling (no need to close window first).
     """
     round_scene = trimesh.Scene()
-    round_scene.add_geometry(_colorize(no_finger_aligned, [0.7, 0.7, 0.7, 0.6]), node_name="base")
+    round_scene.add_geometry(_colorize(quest_aligned, [0.7, 0.7, 0.7, 0.6]), node_name="quest_base")
     round_scene.add_geometry(_colorize(assem, [0.2, 0.6, 0.9, 0.2]), node_name="assem")
     # Use transform= parameter for consistency with nudge mode visualization
     round_scene.add_geometry(_colorize(finger, [0.9, 0.4, 0.4, 0.95]), node_name="finger_left", transform=left_tf)
@@ -1685,7 +1699,7 @@ def _round_prompt(round_idx, left_tf, right_tf, no_finger_aligned, assem, finger
     return viewer.choice or 'd'
 
 
-def calibrate(no_finger_path, finger_path, assem_path, out_dir,
+def calibrate(quest_path, finger_path, assem_path, out_dir,
               samples=6000, icp_iters=1500, residual_thresh=0.1,
               split_axis="y", split_value=0.0,
               tip_axis="z", symmetric=True, nudge=True,
@@ -1701,36 +1715,39 @@ def calibrate(no_finger_path, finger_path, assem_path, out_dir,
     
     # Load meshes
     print("\n[1/7] Loading meshes...")
-    no_finger = trimesh.load(no_finger_path)
+    quest = trimesh.load(quest_path)
     finger = trimesh.load(finger_path)
     assem = trimesh.load(assem_path)
-    print(f"  ✓ no_finger: {len(no_finger.vertices)} vertices")
+    print(f"  ✓ quest (gripper base): {len(quest.vertices)} vertices")
     print(f"  ✓ finger: {len(finger.vertices)} vertices")
     print(f"  ✓ assem: {len(assem.vertices)} vertices")
 
     # Sample points
     print(f"\n[2/7] Sampling {samples} points from each mesh...")
     sample_count = int(min(samples, max_samples))
-    nf_pts = _sample_points(no_finger, sample_count)
+    quest_pts = _sample_points(quest, sample_count)
     assem_pts = _sample_points(assem, sample_count)
     finger_pts = _sample_points(finger, sample_count)
-    print(f"  ✓ Sampled {len(nf_pts)} points from no_finger")
+    print(f"  ✓ Sampled {len(quest_pts)} points from quest")
     print(f"  ✓ Sampled {len(assem_pts)} points from assem")
     print(f"  ✓ Sampled {len(finger_pts)} points from finger")
 
-    # Align no_finger to assem
-    print(f"\n[3/7] Aligning no_finger mesh to assembled reference...")
+    # Align quest to assem
+    print(f"\n[3/7] Aligning quest mesh to assembled reference...")
     print(f"  ICP iterations: {icp_iters}")
-    t_nf_to_assem = _rigid_transform(_run_icp(nf_pts, assem_pts, max_iterations=icp_iters))
-    no_finger_aligned = no_finger.copy()
-    no_finger_aligned.apply_transform(t_nf_to_assem)
-    alignment_score = _mean_nn_distance(nf_pts @ t_nf_to_assem[:3, :3].T + t_nf_to_assem[:3, 3], assem_pts)
+    t_quest_to_assem = _rigid_transform(_run_icp(quest_pts, assem_pts, max_iterations=icp_iters))
+    quest_aligned = quest.copy()
+    quest_aligned.apply_transform(t_quest_to_assem)
+    alignment_score = _mean_nn_distance(quest_pts @ t_quest_to_assem[:3, :3].T + t_quest_to_assem[:3, 3], assem_pts)
     print(f"  ✓ Alignment score: {alignment_score:.6f}")
 
-    # Extract finger-only points (subtract no_finger from assem to get just the finger regions)
+    # Extract finger-only points (subtract quest from assem to get just the finger regions)
     print(f"\n[4/8] Extracting finger-only points (residual_thresh={residual_thresh})...")
-    print("  Using aligned no_finger mesh to identify finger regions only")
-    finger_only_pts = _extract_finger_only_points(assem_pts, no_finger_aligned, residual_thresh, verbose=True)
+    print("  Using aligned quest mesh to identify finger regions only")
+    # Extract finger-only points (subtract quest from assem to get just the finger regions)
+    print(f"\n[4/8] Extracting finger-only points (residual_thresh={residual_thresh})...")
+    print("  Using aligned quest mesh to identify finger regions only")
+    finger_only_pts = _extract_finger_only_points(assem_pts, quest_aligned, residual_thresh, verbose=True)
     if finger_only_pts.size == 0:
         raise RuntimeError("❌ No finger-only points found! Try lowering --residual-thresh")
     
@@ -1754,7 +1771,7 @@ def calibrate(no_finger_path, finger_path, assem_path, out_dir,
     
     # Interactive finger selection - let user confirm which side is left
     print(f"\n[5/8] Select which cluster is the LEFT finger...")
-    left_pts, right_pts = _select_left_finger(left_pts, right_pts, no_finger_aligned, assem)
+    left_pts, right_pts = _select_left_finger(left_pts, right_pts, quest_aligned, assem)
     if left_pts is None:
         print("❌ Calibration canceled by user during finger selection")
         return None
@@ -1786,7 +1803,7 @@ def calibrate(no_finger_path, finger_path, assem_path, out_dir,
         print("  → Opening 3D viewer for manual adjustment")
         print("  → Press ENTER when satisfied to start optimization")
         center_pose_assem, left_rel = _nudge_initial_loop(
-            no_finger_aligned,
+            quest_aligned,
             assem,
             finger,
             center_pose_assem,
@@ -1794,10 +1811,10 @@ def calibrate(no_finger_path, finger_path, assem_path, out_dir,
             inward_axis=inward_axis,
             save_dir=out_dir,
             tip_axis=tip_axis,
-            no_finger_path=no_finger_path,
+            quest_path=quest_path,
             finger_path=finger_path,
             assem_path=assem_path,
-            t_nf_to_assem=t_nf_to_assem,
+            t_quest_to_assem=t_quest_to_assem,
             symmetric=symmetric,
             samples=samples,
             icp_iters=icp_iters,
@@ -1836,8 +1853,8 @@ def calibrate(no_finger_path, finger_path, assem_path, out_dir,
             if interactive_rounds:
                 pre_choice = _pre_optimization_prompt(
                     round_idx, best_center, best_left_rel,
-                    no_finger_aligned, assem, finger,
-                    out_dir, no_finger_path, finger_path, assem_path, t_nf_to_assem,
+                    quest_aligned, assem, finger,
+                    out_dir, quest_path, finger_path, assem_path, t_quest_to_assem,
                     tip_axis, symmetric, samples, icp_iters, residual_thresh,
                     split_axis, split_value,
                 )
@@ -1864,7 +1881,7 @@ def calibrate(no_finger_path, finger_path, assem_path, out_dir,
                 icp_iters=min(50, icp_iters),
                 verbose=True,
                 show_stages=show_stages,
-                no_finger_aligned=no_finger_aligned,
+                no_finger_aligned=quest_aligned,
                 assem=assem,
                 finger=finger,
             )
@@ -1888,7 +1905,7 @@ def calibrate(no_finger_path, finger_path, assem_path, out_dir,
                 center_pose_assem = best_center
                 left_rel = best_left_rel
                 
-                choice = _round_prompt(round_idx, t_finger_left, t_finger_right, no_finger_aligned, assem, finger)
+                choice = _round_prompt(round_idx, t_finger_left, t_finger_right, quest_aligned, assem, finger)
                 if choice == "s":
                     break
                 if choice == "d":
@@ -1898,7 +1915,7 @@ def calibrate(no_finger_path, finger_path, assem_path, out_dir,
                     # Pass current state to nudge - positions will be consistent
                     # align_inward=False to preserve current positions after optimization
                     center_pose_assem, left_rel = _nudge_initial_loop(
-                        no_finger_aligned,
+                        quest_aligned,
                         assem,
                         finger,
                         center_pose_assem,
@@ -1906,10 +1923,10 @@ def calibrate(no_finger_path, finger_path, assem_path, out_dir,
                         inward_axis=inward_axis,
                         save_dir=out_dir,
                         tip_axis=tip_axis,
-                        no_finger_path=no_finger_path,
+                        quest_path=quest_path,
                         finger_path=finger_path,
                         assem_path=assem_path,
-                        t_nf_to_assem=t_nf_to_assem,
+                        t_quest_to_assem=t_quest_to_assem,
                         symmetric=symmetric,
                         samples=samples,
                         icp_iters=icp_iters,
@@ -2001,20 +2018,20 @@ def calibrate(no_finger_path, finger_path, assem_path, out_dir,
                 t_finger_right = initial_right
 
     if interactive_rounds and not symmetric:
-        choice = _round_prompt("final", t_finger_left, t_finger_right, no_finger_aligned, assem, finger)
+        choice = _round_prompt("final", t_finger_left, t_finger_right, quest_aligned, assem, finger)
         if choice == "d":
             return None
 
-    t_nf_to_assem_inv = np.linalg.inv(t_nf_to_assem)
-    t_finger_left_to_no_finger = t_nf_to_assem_inv @ t_finger_left
-    t_finger_right_to_no_finger = t_nf_to_assem_inv @ t_finger_right
-    t_finger_base_to_no_finger = t_nf_to_assem_inv @ center_pose_assem
+    t_quest_to_assem_inv = np.linalg.inv(t_quest_to_assem)
+    t_finger_left_to_quest = t_quest_to_assem_inv @ t_finger_left
+    t_finger_right_to_quest = t_quest_to_assem_inv @ t_finger_right
+    t_finger_base_to_quest = t_quest_to_assem_inv @ center_pose_assem
 
     if keep_best:
         if t_finger_left_opt is not t_finger_left:
             # Show optimized pose using same style as nudge mode for consistency
             opt_scene = trimesh.Scene()
-            opt_scene.add_geometry(_colorize(no_finger_aligned, [0.7, 0.7, 0.7, 0.6]), node_name="base")
+            opt_scene.add_geometry(_colorize(quest_aligned, [0.7, 0.7, 0.7, 0.6]), node_name="quest_base")
             opt_scene.add_geometry(_colorize(assem, [0.2, 0.6, 0.9, 0.2]), node_name="assem")
             opt_scene.add_geometry(_colorize(finger, [0.9, 0.4, 0.4, 0.95]), node_name="finger_left", transform=t_finger_left_opt)
             opt_scene.add_geometry(_colorize(finger, [0.4, 0.9, 0.4, 0.95]), node_name="finger_right", transform=t_finger_right_opt)
@@ -2023,10 +2040,10 @@ def calibrate(no_finger_path, finger_path, assem_path, out_dir,
 
     json_path = _write_calibration_result(
         out_dir,
-        no_finger_path,
+        quest_path,
         finger_path,
         assem_path,
-        t_nf_to_assem,
+        t_quest_to_assem,
         t_finger_left,
         t_finger_right,
         tip_axis,
@@ -2037,7 +2054,7 @@ def calibrate(no_finger_path, finger_path, assem_path, out_dir,
         residual_thresh,
         split_axis,
         split_value,
-        no_finger,
+        quest,
         finger,
         "final",
         json_name="calibration_result.json",
@@ -2069,8 +2086,8 @@ Example usage:
   python calibrate_finger.py --samples 10000 --icp-iters 150
         """
     )
-    parser.add_argument("--no-finger", default="src/meshes/left_no_finger.STL",
-                        help="Path to gripper base mesh (without fingers)")
+    parser.add_argument("--quest", "--no-finger", dest="quest", default="src/meshes/left_no_finger.STL",
+                        help="Path to quest/gripper base mesh (without fingers)")
     parser.add_argument("--finger", default="src/meshes/finger.STL",
                         help="Path to single finger mesh")
     parser.add_argument("--assem", default="src/meshes/left_assem.STL",
@@ -2116,14 +2133,14 @@ Example usage:
     print("\n" + "="*70)
     print("  FINGER CALIBRATION TOOL")
     print("="*70)
-    print(f"  no_finger: {args.no_finger}")
-    print(f"  finger:    {args.finger}")
-    print(f"  assem:     {args.assem}")
-    print(f"  output:    {args.out}")
+    print(f"  quest (gripper base): {args.quest}")
+    print(f"  finger:               {args.finger}")
+    print(f"  assem:                {args.assem}")
+    print(f"  output:               {args.out}")
     print("="*70 + "\n")
 
     result = calibrate(
-        args.no_finger,
+        args.quest,
         args.finger,
         args.assem,
         args.out,

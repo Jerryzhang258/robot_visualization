@@ -61,6 +61,12 @@ class Enhanced3DVisualizer(CombinedVisualizer):
             'finger_mesh_hide': '手指网格: 隐藏',
             'finger_axes_show': '手指坐标轴: 显示',
             'finger_axes_hide': '手指坐标轴: 隐藏',
+            'left_raw_transform_hide': '左臂变换: 隐藏',
+            'left_raw_transform_show_raw': '左臂变换: 显示原始变换',
+            'left_raw_transform_show_all': '左臂变换: 显示原始变换+gripper_base',
+            'right_raw_transform_hide': '右臂变换: 隐藏',
+            'right_raw_transform_show_raw': '右臂变换: 显示原始变换',
+            'right_raw_transform_show_all': '右臂变换: 显示原始变换+gripper_base',
             'exiting': '退出',
             'realtime_trajectory': '实时轨迹',
             '3d_world_view': '3D世界视图',
@@ -118,10 +124,12 @@ class Enhanced3DVisualizer(CombinedVisualizer):
             'cam_translate_on': 'Camera Translation Mode: ON',
             'cam_translate_off': 'Camera Translation Mode: OFF',
             'screenshot_saved': 'Screenshot: {0}',
-            'left_raw_transform_show': 'Left Gripper Raw Transform: SHOW',
-            'left_raw_transform_hide': 'Left Gripper Raw Transform: HIDE',
-            'right_raw_transform_show': 'Right Gripper Raw Transform: SHOW',
-            'right_raw_transform_hide': 'Right Gripper Raw Transform: HIDE',
+            'left_raw_transform_hide': 'Left Arm Transform: HIDE',
+            'left_raw_transform_show_raw': 'Left Arm Transform: SHOW RAW',
+            'left_raw_transform_show_all': 'Left Arm Transform: SHOW RAW + gripper_base',
+            'right_raw_transform_hide': 'Right Arm Transform: HIDE',
+            'right_raw_transform_show_raw': 'Right Arm Transform: SHOW RAW',
+            'right_raw_transform_show_all': 'Right Arm Transform: SHOW RAW + gripper_base',
             'gripper_mesh_show': 'Gripper Mesh: SHOW',
             'gripper_mesh_hide': 'Gripper Mesh: HIDE',
             'finger_mesh_show': 'Finger Mesh: SHOW',
@@ -166,7 +174,7 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         self._cached_right_finger_mesh = None  # Separate right finger mesh
         self._cached_gripper_mesh_left = None
         self._cached_gripper_mesh_right = None
-        self._show_raw_transforms = {0: False, 1: False}
+        self._show_raw_transforms = {0: 0, 1: 0}  # 0=hide, 1=show raw, 2=show raw+gripper_base
         self._show_controller_mesh = True
         self._show_claw_finger_mesh = True
         self._show_finger_axes = False
@@ -527,8 +535,34 @@ class Enhanced3DVisualizer(CombinedVisualizer):
 
             frame_pose = poses[current_idx]
             
-            if self._show_raw_transforms.get(r, False):
+            # Handle transform visualization modes
+            # 0 = hide, 1 = show raw quest transform, 2 = show raw + gripper_base
+            transform_mode = self._show_raw_transforms.get(r, 0)
+            if transform_mode >= 1:
+                # Show raw quest transform (frame_pose)
                 self._world_dynamic_nodes.append(scene.add(self._cached_axis_mesh, pose=frame_pose))
+            
+            if transform_mode == 2:
+                # Show gripper_base transform (identity in gripper frame)
+                # Get calibration for this specific robot
+                calib = self.finger_calibrations.get(r) if getattr(self, "finger_calibrations", None) else None
+                print(f"🔍 DEBUG: robot {r}, transform_mode={transform_mode}, calib exists: {calib is not None}")
+                if calib:
+                    # gripper_base is at quest_to_gripper_base from quest
+                    # Note: the key is "quest_to_gripper_base", not "transform_quest_to_gripper_base"
+                    transform_quest_to_gripper_base = calib.get('quest_to_gripper_base', np.eye(4))
+                    print(f"🔍 DEBUG: transform_quest_to_gripper_base shape: {transform_quest_to_gripper_base.shape}")
+                    print(f"🔍 DEBUG: transform_quest_to_gripper_base:\n{transform_quest_to_gripper_base}")
+                    gripper_base_pose = frame_pose @ transform_quest_to_gripper_base
+                    print(f"🔍 DEBUG: gripper_base_pose:\n{gripper_base_pose}")
+                    # Create a new axis mesh instance for gripper_base (can't reuse same mesh object)
+                    gripper_base_axis_mesh = _axis_mesh(size=self._gripper_axis_size)
+                    node = scene.add(gripper_base_axis_mesh, pose=gripper_base_pose)
+                    print(f"🔍 DEBUG: Added gripper_base axis node: {node}")
+                    self._world_dynamic_nodes.append(node)
+                else:
+                    # Debug: print if calibration not found
+                    print(f"⚠️  Warning: No calibration found for robot {r}, gripper_base axes not shown")
 
             if self._show_controller_mesh:
                 gripper_mesh = self._cached_gripper_mesh_left if r == 0 else self._cached_gripper_mesh_right
@@ -1179,12 +1213,24 @@ class Enhanced3DVisualizer(CombinedVisualizer):
                 cv2.imwrite(filename, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
                 self._safe_print(self._t('screenshot_saved').format(filename))
             elif key == ord('u'):
-                self._show_raw_transforms[0] = not self._show_raw_transforms[0]
-                msg = self._t('left_raw_transform_show') if self._show_raw_transforms[0] else self._t('left_raw_transform_hide')
+                self._show_raw_transforms[0] = (self._show_raw_transforms[0] + 1) % 3
+                mode = self._show_raw_transforms[0]
+                if mode == 0:
+                    msg = self._t('left_raw_transform_hide')
+                elif mode == 1:
+                    msg = self._t('left_raw_transform_show_raw')
+                else:  # mode == 2
+                    msg = self._t('left_raw_transform_show_all')
                 self._safe_print(msg)
             elif key == ord('i'):
-                self._show_raw_transforms[1] = not self._show_raw_transforms[1]
-                msg = self._t('right_raw_transform_show') if self._show_raw_transforms[1] else self._t('right_raw_transform_hide')
+                self._show_raw_transforms[1] = (self._show_raw_transforms[1] + 1) % 3
+                mode = self._show_raw_transforms[1]
+                if mode == 0:
+                    msg = self._t('right_raw_transform_hide')
+                elif mode == 1:
+                    msg = self._t('right_raw_transform_show_raw')
+                else:  # mode == 2
+                    msg = self._t('right_raw_transform_show_all')
                 self._safe_print(msg)
             elif key in (ord('m'), ord('M')):
                 self._show_controller_mesh = not self._show_controller_mesh

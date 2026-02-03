@@ -32,13 +32,13 @@ from calibrate_finger import (
 )
 
 
-def _select_finger_cluster(cluster1_pts, cluster2_pts, no_finger_aligned, assem, finger_name="LEFT"):
+def _select_finger_cluster(cluster1_pts, cluster2_pts, quest_aligned, assem, finger_name="LEFT"):
     """Interactive selection of which cluster corresponds to the named finger.
     
     Args:
         cluster1_pts: First cluster of finger points
         cluster2_pts: Second cluster of finger points
-        no_finger_aligned: Aligned base mesh (for visualization)
+        quest_aligned: Aligned quest/base mesh (for visualization)
         assem: Assembled reference mesh (for visualization)
         finger_name: Name of finger to select ("LEFT" or "RIGHT")
         
@@ -58,8 +58,8 @@ def _select_finger_cluster(cluster1_pts, cluster2_pts, no_finger_aligned, assem,
     # Create visualization scene
     scene_meshes = []
     
-    # Add base mesh (gray)
-    base_colored = no_finger_aligned.copy()
+    # Add quest base mesh (gray)
+    base_colored = quest_aligned.copy()
     base_colored.visual.vertex_colors = np.full((len(base_colored.vertices), 4), [180, 180, 180, 255], dtype=np.uint8)
     scene_meshes.append(base_colored)
     
@@ -90,8 +90,77 @@ def _select_finger_cluster(cluster1_pts, cluster2_pts, no_finger_aligned, assem,
             print("  Invalid choice. Please enter 1, 2, or q.")
 
 
+def _visualize_calibration(quest, left_finger, right_finger, assem, 
+                           t_left_to_quest, t_right_to_quest, t_quest_to_assem):
+    """Visualize the calibration result before saving.
+    
+    Shows the assembled gripper with:
+    - Gray: quest/gripper base
+    - Red: left finger (transformed)
+    - Green: right finger (transformed)
+    - Blue transparent: original assembled reference
+    
+    Args:
+        quest: Quest/gripper base mesh
+        left_finger: Left finger mesh
+        right_finger: Right finger mesh
+        assem: Assembled reference mesh
+        t_left_to_quest: Transform from left finger to quest frame
+        t_right_to_quest: Transform from right finger to quest frame
+        t_quest_to_assem: Transform from quest to assem frame
+    """
+    print(f"\n{'='*70}")
+    print("  VISUALIZATION - Review calibration before saving")
+    print(f"{'='*70}")
+    print("  Color coding:")
+    print("    Gray:  Quest/gripper base (aligned to assem)")
+    print("    Red:   Left finger (calibrated)")
+    print("    Green: Right finger (calibrated)")
+    print("    Blue (transparent): Original assembled reference")
+    print(f"{'='*70}\n")
+    
+    # Create scene
+    scene_meshes = []
+    
+    # Add assembled reference (transparent blue) at origin
+    assem_colored = assem.copy()
+    assem_colored.visual.vertex_colors = np.full(
+        (len(assem_colored.vertices), 4), [51, 153, 229, 64], dtype=np.uint8
+    )
+    scene_meshes.append(assem_colored)
+    
+    # Add quest base (gray) transformed to assem frame
+    quest_colored = quest.copy()
+    quest_colored.apply_transform(t_quest_to_assem)
+    quest_colored.visual.vertex_colors = np.full(
+        (len(quest_colored.vertices), 4), [180, 180, 180, 255], dtype=np.uint8
+    )
+    scene_meshes.append(quest_colored)
+    
+    # Add left finger (red) transformed: assem frame = quest_to_assem @ left_to_quest
+    left_colored = left_finger.copy()
+    left_colored.apply_transform(t_quest_to_assem @ t_left_to_quest)
+    left_colored.visual.vertex_colors = np.full(
+        (len(left_colored.vertices), 4), [230, 77, 77, 242], dtype=np.uint8
+    )
+    scene_meshes.append(left_colored)
+    
+    # Add right finger (green) transformed: assem frame = quest_to_assem @ right_to_quest
+    right_colored = right_finger.copy()
+    right_colored.apply_transform(t_quest_to_assem @ t_right_to_quest)
+    right_colored.visual.vertex_colors = np.full(
+        (len(right_colored.vertices), 4), [77, 230, 77, 242], dtype=np.uint8
+    )
+    scene_meshes.append(right_colored)
+    
+    scene = trimesh.Scene(scene_meshes)
+    scene.show(caption="Calibration Result - Close window to continue")
+    
+    print("  ✓ Visualization closed\n")
+
+
 def calibrate_separate_fingers(
-    no_finger_path,
+    quest_path,
     left_finger_path,
     right_finger_path,
     assem_path,
@@ -110,7 +179,7 @@ def calibrate_separate_fingers(
     Calibrate left and right fingers independently without symmetry assumptions.
     
     Args:
-        no_finger_path: Path to base gripper mesh (without fingers)
+        quest_path: Path to quest/gripper base mesh (without fingers)
         left_finger_path: Path to left finger mesh STL file
         right_finger_path: Path to right finger mesh STL file
         assem_path: Path to assembled gripper reference (base + both fingers)
@@ -131,7 +200,7 @@ def calibrate_separate_fingers(
     print("\n" + "="*70)
     print("  SEPARATE FINGER CALIBRATION (Non-Symmetric)")
     print("="*70)
-    print(f"  Base mesh:    {no_finger_path}")
+    print(f"  Quest base:   {quest_path}")
     print(f"  Left finger:  {left_finger_path}")
     print(f"  Right finger: {right_finger_path}")
     print(f"  Reference:    {assem_path}")
@@ -140,11 +209,11 @@ def calibrate_separate_fingers(
     
     # Load meshes
     print("[1/8] Loading meshes...")
-    no_finger = trimesh.load(no_finger_path)
+    quest = trimesh.load(quest_path)
     left_finger = trimesh.load(left_finger_path)
     right_finger = trimesh.load(right_finger_path)
     assem = trimesh.load(assem_path)
-    print(f"  ✓ Base: {len(no_finger.vertices)} vertices")
+    print(f"  ✓ Quest (gripper base): {len(quest.vertices)} vertices")
     print(f"  ✓ Left finger: {len(left_finger.vertices)} vertices")
     print(f"  ✓ Right finger: {len(right_finger.vertices)} vertices")
     print(f"  ✓ Reference: {len(assem.vertices)} vertices")
@@ -152,31 +221,31 @@ def calibrate_separate_fingers(
     # Sample points
     print(f"\n[2/8] Sampling {samples} points from each mesh...")
     sample_count = min(samples, max_samples)
-    nf_pts = _sample_points(no_finger, sample_count)
+    quest_pts = _sample_points(quest, sample_count)
     assem_pts = _sample_points(assem, sample_count)
     left_finger_pts = _sample_points(left_finger, sample_count)
     right_finger_pts = _sample_points(right_finger, sample_count)
-    print(f"  ✓ Base: {len(nf_pts)} points")
+    print(f"  ✓ Quest: {len(quest_pts)} points")
     print(f"  ✓ Assembled: {len(assem_pts)} points")
     print(f"  ✓ Left finger: {len(left_finger_pts)} points")
     print(f"  ✓ Right finger: {len(right_finger_pts)} points")
     
-    # Align base mesh to assembled reference
-    print(f"\n[3/8] Aligning base mesh to reference...")
+    # Align quest mesh to assembled reference
+    print(f"\n[3/8] Aligning quest mesh to reference...")
     print(f"  ICP iterations: {icp_iters}")
-    t_nf_to_assem = _rigid_transform(_run_icp(nf_pts, assem_pts, max_iterations=icp_iters))
-    no_finger_aligned = no_finger.copy()
-    no_finger_aligned.apply_transform(t_nf_to_assem)
+    t_quest_to_assem = _rigid_transform(_run_icp(quest_pts, assem_pts, max_iterations=icp_iters))
+    quest_aligned = quest.copy()
+    quest_aligned.apply_transform(t_quest_to_assem)
     alignment_score = _mean_nn_distance(
-        nf_pts @ t_nf_to_assem[:3, :3].T + t_nf_to_assem[:3, 3],
+        quest_pts @ t_quest_to_assem[:3, :3].T + t_quest_to_assem[:3, 3],
         assem_pts
     )
     print(f"  ✓ Alignment score: {alignment_score:.6f} mm")
     
-    # Extract finger-only points (subtract base from assembled)
+    # Extract finger-only points (subtract quest from assembled)
     print(f"\n[4/8] Extracting finger-only regions (threshold={residual_thresh} mm)...")
     finger_only_pts = _extract_finger_only_points(
-        assem_pts, no_finger_aligned, residual_thresh, verbose=True
+        assem_pts, quest_aligned, residual_thresh, verbose=True
     )
     if finger_only_pts.size == 0:
         raise RuntimeError("❌ No finger-only points found! Try lowering --residual-thresh")
@@ -200,7 +269,7 @@ def calibrate_separate_fingers(
     # Interactive selection: user picks which cluster is left finger
     print(f"\n[6/8] Identifying left and right fingers...")
     left_target_pts, right_target_pts = _select_finger_cluster(
-        cluster1_pts, cluster2_pts, no_finger_aligned, assem, finger_name="LEFT"
+        cluster1_pts, cluster2_pts, quest_aligned, assem, finger_name="LEFT"
     )
     if left_target_pts is None:
         print("❌ Calibration canceled by user")
@@ -215,13 +284,13 @@ def calibrate_separate_fingers(
     init_left = _initial_align(left_finger_pts, left_target_pts, verbose=True)
     
     print("  Stage 2: Multi-start ICP (testing multiple orientations)")
-    t_left_to_no_finger = _multi_start_icp(
+    t_left_to_quest = _multi_start_icp(
         left_finger_pts, left_target_pts, init_left,
         max_iterations=icp_iters, verbose=True
     )
     
     # Score left finger alignment
-    transformed_left = left_finger_pts @ t_left_to_no_finger[:3, :3].T + t_left_to_no_finger[:3, 3]
+    transformed_left = left_finger_pts @ t_left_to_quest[:3, :3].T + t_left_to_quest[:3, 3]
     left_score = _mean_nn_distance(transformed_left, left_target_pts, max_samples=score_samples)
     print(f"  ✓ Left finger score: {left_score:.6f} mm")
     
@@ -231,15 +300,26 @@ def calibrate_separate_fingers(
     init_right = _initial_align(right_finger_pts, right_target_pts, verbose=True)
     
     print("  Stage 2: Multi-start ICP (testing multiple orientations)")
-    t_right_to_no_finger = _multi_start_icp(
+    t_right_to_quest = _multi_start_icp(
         right_finger_pts, right_target_pts, init_right,
         max_iterations=icp_iters, verbose=True
     )
     
     # Score right finger alignment
-    transformed_right = right_finger_pts @ t_right_to_no_finger[:3, :3].T + t_right_to_no_finger[:3, 3]
+    transformed_right = right_finger_pts @ t_right_to_quest[:3, :3].T + t_right_to_quest[:3, 3]
     right_score = _mean_nn_distance(transformed_right, right_target_pts, max_samples=score_samples)
     print(f"  ✓ Right finger score: {right_score:.6f} mm")
+    
+    # IMPORTANT: The ICP aligned fingers to target points in the assem frame (quest_aligned).
+    # We need to transform back to the original quest frame.
+    # Transform chain: finger -> aligned_quest -> quest
+    # Which means: finger_to_quest = inv(quest_to_assem) @ finger_to_aligned_quest
+    t_assem_to_quest = np.linalg.inv(t_quest_to_assem)
+    t_left_in_quest_frame = t_assem_to_quest @ t_left_to_quest
+    t_right_in_quest_frame = t_assem_to_quest @ t_right_to_quest
+    
+    print(f"\n  Transforming results to quest reference frame...")
+    print(f"    (ICP was done in assem frame, converting to quest frame)")
     
     # Display final results
     print(f"\n{'='*70}")
@@ -250,13 +330,24 @@ def calibrate_separate_fingers(
     print(f"  Average:      {(left_score + right_score) / 2:.6f} mm")
     print(f"{'='*70}\n")
     
+    # Visualize calibration result before saving
+    print(f"[9/9] Visualizing calibration result...")
+    _visualize_calibration(
+        quest, left_finger, right_finger, assem,
+        t_left_in_quest_frame, t_right_in_quest_frame, t_quest_to_assem
+    )
+    
     # Save calibration JSON
     os.makedirs(out_dir, exist_ok=True)
     output_path = os.path.join(out_dir, "calibration_result.json")
     
+    # For visualization: quest is the reference frame from the data,
+    # so transform_quest_to_gripper_base is identity
+    t_quest_to_gripper_base = np.eye(4, dtype=np.float64)
+    
     calibration_data = {
         "timestamp": datetime.datetime.now().isoformat(),
-        "no_finger_path": no_finger_path,
+        "quest_path": quest_path,
         "left_finger_path": left_finger_path,
         "right_finger_path": right_finger_path,
         "assem_path": assem_path,
@@ -267,9 +358,16 @@ def calibrate_separate_fingers(
         "split_value": split_value,
         "tip_axis": tip_axis,
         "symmetric": False,  # Mark as non-symmetric calibration
-        "transform_no_finger_to_assem": t_nf_to_assem.tolist(),
-        "transform_left_finger_to_no_finger": t_left_to_no_finger.tolist(),
-        "transform_right_finger_to_no_finger": t_right_to_no_finger.tolist(),
+        # New hierarchy: quest -> gripper_base (identity) -> fingers
+        "transform_quest_to_gripper_base": t_quest_to_gripper_base.tolist(),
+        "transform_gripper_base_to_left_finger": t_left_in_quest_frame.tolist(),
+        "transform_gripper_base_to_right_finger": t_right_in_quest_frame.tolist(),
+        # Legacy formats for backward compatibility
+        "transform_quest_to_assem": t_quest_to_assem.tolist(),
+        "transform_left_finger_to_quest": t_left_in_quest_frame.tolist(),
+        "transform_right_finger_to_quest": t_right_in_quest_frame.tolist(),
+        "transform_left_finger_to_no_finger": t_left_in_quest_frame.tolist(),
+        "transform_right_finger_to_no_finger": t_right_in_quest_frame.tolist(),
         "alignment_scores": {
             "base_to_assem": float(alignment_score),
             "left_finger": float(left_score),
@@ -296,7 +394,7 @@ Example usage:
   
   # Custom mesh paths
   python calibrate_finger_separate.py \\
-      --no-finger src/meshes/left_no_finger.STL \\
+      --quest src/meshes/left_no_finger.STL \\
       --left-finger src/meshes/left_finger.STL \\
       --right-finger src/meshes/right_finger.STL \\
       --assem src/meshes/left_assem.STL
@@ -308,8 +406,8 @@ Example usage:
   python calibrate_finger_separate.py --samples 10000 --icp-iters 150
         """
     )
-    parser.add_argument("--no-finger", default="src/meshes/left_no_finger.STL",
-                        help="Path to gripper base mesh (without fingers)")
+    parser.add_argument("--quest", "--no-finger", dest="quest", default="src/meshes/left_no_finger.STL",
+                        help="Path to quest/gripper base mesh (without fingers)")
     parser.add_argument("--left-finger", default="src/meshes/left_finger.STL",
                         help="Path to left finger mesh")
     parser.add_argument("--right-finger", default="src/meshes/right_finger.STL",
@@ -340,7 +438,7 @@ Example usage:
     
     try:
         result = calibrate_separate_fingers(
-            args.no_finger,
+            args.quest,
             args.left_finger,
             args.right_finger,
             args.assem,
