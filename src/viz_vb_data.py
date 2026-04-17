@@ -65,6 +65,16 @@ def get_transform(pos, rot_axis_angle):
     T[:3, 3] = pos
     return T
 
+
+# Module-level mesh cache — avoids repeated STL disk reads and trimesh rebuilds per frame.
+_MESH_CACHE = {}
+
+
+def _cached(key, loader):
+    if key not in _MESH_CACHE:
+        _MESH_CACHE[key] = loader()
+    return _MESH_CACHE[key]
+
 def decode_image(img_data):
     """统一的图像解码"""
     if isinstance(img_data, bytes):
@@ -149,36 +159,41 @@ def load_episode_data(replay_buffer, episode_idx):
     has['robot0_gripper'] = 'robot0_gripper_width' in keys
     has['robot1_gripper'] = 'robot1_gripper_width' in keys
     
-    for i in range(ep_slice.start, ep_slice.stop):
-        for r in ROBOT_IDS:
-            prefix = f'robot{r}'
-            cam_id = r
-            
-            # 加载位姿
-            if r == 0 or has['robot1_pose']:
-                # 直接使用数据（已经是右手坐标系）
-                pos = replay_buffer[f'robot{r}_eef_pos'][i]
-                rot = replay_buffer[f'robot{r}_eef_rot_axis_angle'][i]
-                
-                # 生成变换矩阵
-                tx = get_transform(pos, rot)
-                data[prefix]['poses'].append(tx)
-            
-            # 加载夹爪
-            if has[f'{prefix}_gripper']:
-                data[prefix]['gripper'].append(replay_buffer[f'{prefix}_gripper_width'][i][0])
-            
-            # 加载图像和点云
-            for sensor in SENSOR_KEY_CANDIDATES:
-                key = resolved_keys.get(f'{prefix}_{sensor}')
-                if not key:
-                    continue
-                raw = replay_buffer[key][i]
-                if 'pc' in sensor:
-                    data[prefix][sensor].append(load_pointcloud(raw))
-                else:
-                    data[prefix][sensor].append(decode_image(raw))
-    
+    # 批量从 zarr 切片读取 — 比 per-index 快很多(少了 N 次 chunk-load 开销)
+    start, stop = ep_slice.start, ep_slice.stop
+    for r in ROBOT_IDS:
+        prefix = f'robot{r}'
+
+        # 位姿(批量)
+        if r == 0 or has['robot1_pose']:
+            pos_arr = np.asarray(replay_buffer[f'robot{r}_eef_pos'][start:stop])
+            rot_arr = np.asarray(replay_buffer[f'robot{r}_eef_rot_axis_angle'][start:stop])
+            poses_list = [get_transform(pos_arr[i], rot_arr[i]) for i in range(len(pos_arr))]
+            data[prefix]['poses'] = poses_list
+            # 预计算 Nx3 末端位置数组 — 轨迹渲染/绘图时复用,避免每帧 O(N) 重建
+            if poses_list:
+                data[prefix]['positions'] = np.asarray(
+                    [T[:3, 3] for T in poses_list], dtype=np.float64
+                )
+            else:
+                data[prefix]['positions'] = np.empty((0, 3), dtype=np.float64)
+
+        # 夹爪宽度(批量)
+        if has[f'{prefix}_gripper']:
+            gw = np.asarray(replay_buffer[f'{prefix}_gripper_width'][start:stop])
+            data[prefix]['gripper'] = gw[:, 0].tolist() if gw.ndim == 2 else gw.tolist()
+
+        # 图像和点云(批量切片后再解码)
+        for sensor in SENSOR_KEY_CANDIDATES:
+            key = resolved_keys.get(f'{prefix}_{sensor}')
+            if not key:
+                continue
+            raw_slice = replay_buffer[key][start:stop]
+            if 'pc' in sensor:
+                data[prefix][sensor] = [load_pointcloud(r_) for r_ in raw_slice]
+            else:
+                data[prefix][sensor] = [decode_image(r_) for r_ in raw_slice]
+
     return data, has
 
 def create_combined_image(data, frame_idx, pc_images, world_image, height=250):
@@ -251,33 +266,26 @@ def _lookat_camera_pose(eye, center, up):
     return np.linalg.inv(m)
 
 def _quest_controller_mesh(is_left=True):
-    """加载Quest手柄STL模型"""
-    import os
-    mesh_file = 'src/meshes/Oculus_Meta_Quest_Touch_Plus_Controller_Left.stl' if is_left else 'src/meshes/Assem1.STL'
-    
-    if not os.path.exists(mesh_file):
-        # 如果文件不存在，返回简单圆柱体
-        cyl = trimesh.creation.cylinder(radius=0.02, height=0.15, sections=16)
+    """加载Quest手柄STL模型(缓存 — 原本每帧从磁盘重载)"""
+    def _load():
+        mesh_file = 'src/meshes/Oculus_Meta_Quest_Touch_Plus_Controller_Left.stl' if is_left else 'src/meshes/Assem1.STL'
+        if not os.path.exists(mesh_file):
+            cyl = trimesh.creation.cylinder(radius=0.02, height=0.15, sections=16)
+            rgba = np.array([0.3, 0.3, 0.8, 1.0])
+            cyl.visual.vertex_colors = (rgba * 255).astype(np.uint8)
+            return pyrender.Mesh.from_trimesh(cyl, smooth=False)
+        mesh = trimesh.load(mesh_file)
+        mesh.apply_scale(0.001)
         rgba = np.array([0.3, 0.3, 0.8, 1.0])
-        cyl.visual.vertex_colors = (rgba * 255).astype(np.uint8)
-        return pyrender.Mesh.from_trimesh(cyl, smooth=False)
-    
-    # 加载STL
-    mesh = trimesh.load(mesh_file)
-    
-    # 调整大小（Quest手柄实际尺寸较大，可能需要缩放）
-    scale = 0.001  # STL单位可能是mm，转为m
-    mesh.apply_scale(scale)
-    
-    # 设置颜色
-    rgba = np.array([0.3, 0.3, 0.8, 1.0])
-    mesh.visual.vertex_colors = (rgba * 255).astype(np.uint8)
-    
-    return pyrender.Mesh.from_trimesh(mesh, smooth=True)
+        mesh.visual.vertex_colors = (rgba * 255).astype(np.uint8)
+        return pyrender.Mesh.from_trimesh(mesh, smooth=True)
+    return _cached(f'quest_ctrl:{is_left}', _load)
 
 def _axis_mesh(size=0.05):
-    axis = trimesh.creation.axis(origin_size=size * 0.2, axis_length=size)
-    return pyrender.Mesh.from_trimesh(axis, smooth=False)
+    def _load():
+        axis = trimesh.creation.axis(origin_size=size * 0.2, axis_length=size)
+        return pyrender.Mesh.from_trimesh(axis, smooth=False)
+    return _cached(f'axis:{size}', _load)
 
 def _pointcloud_mesh(points, color=[1.0, 1.0, 0.0]):
     if len(points) == 0:
@@ -300,89 +308,99 @@ def _cylinder_between(p0, p1, radius, color):
     return cyl
 
 def _line_mesh(points, color=[1.0, 0.0, 0.0], radius=0.01):
+    """轨迹线 mesh。用 GL_LINE_STRIP primitive(O(1) 构建),代替原先 N-1 个 cylinder。
+
+    radius 参数保留为兼容接口(line_strip 无法设线宽,忽略)。
+    """
     if len(points) < 2:
         return None
-    pts = np.asarray(points, dtype=np.float64)
-    meshes = []
-    for i in range(len(pts) - 1):
-        cyl = _cylinder_between(pts[i], pts[i + 1], radius, color)
-        if cyl is not None:
-            meshes.append(cyl)
-    if not meshes:
-        return None
-    merged = trimesh.util.concatenate(meshes)
-    return pyrender.Mesh.from_trimesh(merged, smooth=False)
+    pts = np.asarray(points, dtype=np.float32)
+    rgba = np.array(list(color) + [1.0], dtype=np.float32)
+    colors = np.tile(rgba, (pts.shape[0], 1))
+    try:
+        prim = pyrender.Primitive(
+            positions=pts,
+            color_0=colors,
+            mode=3,  # GL_LINE_STRIP
+        )
+        return pyrender.Mesh(primitives=[prim])
+    except Exception:
+        # fallback: 原始 cylinder 路径(极少命中,仅保底)
+        stride = max(1, len(pts) // 150)
+        sampled = pts[::stride]
+        meshes = []
+        for i in range(len(sampled) - 1):
+            cyl = _cylinder_between(
+                np.asarray(sampled[i], dtype=np.float64),
+                np.asarray(sampled[i + 1], dtype=np.float64),
+                radius, color,
+            )
+            if cyl is not None:
+                meshes.append(cyl)
+        if not meshes:
+            return None
+        merged = trimesh.util.concatenate(meshes)
+        return pyrender.Mesh.from_trimesh(merged, smooth=False)
 
 def _placeholder_cad_box():
-    # TODO: Replace with real CAD model mesh when available.
-    box = trimesh.creation.box(extents=[0.03, 0.1, 0.03])
-    box.visual.vertex_colors = np.tile(np.array([180, 180, 180, 255], dtype=np.uint8), (len(box.vertices), 1))
-    return pyrender.Mesh.from_trimesh(box, smooth=False)
+    def _load():
+        box = trimesh.creation.box(extents=[0.03, 0.1, 0.03])
+        box.visual.vertex_colors = np.tile(np.array([180, 180, 180, 255], dtype=np.uint8), (len(box.vertices), 1))
+        return pyrender.Mesh.from_trimesh(box, smooth=False)
+    return _cached('placeholder_cad_box', _load)
 
 def load_controller_mesh(is_left=True):
-    """加载Quest手柄STL"""
-    import os
-    filename = 'controller_left_simple.stl' if is_left else 'controller_right_simple.stl'
-    filepath = os.path.join('src', 'meshes', filename)
-    
-    if not os.path.exists(filepath):
-        return None
-    
-    mesh = trimesh.load(filepath)
-    mesh.apply_scale(0.002)  # mm转m，放大2倍
-    mesh.visual.vertex_colors = np.array([100, 100, 200, 255], dtype=np.uint8)
-    
-    return pyrender.Mesh.from_trimesh(mesh, smooth=True)
+    """加载Quest手柄STL(缓存)"""
+    def _load():
+        filename = 'controller_left_simple.stl' if is_left else 'controller_right_simple.stl'
+        filepath = os.path.join('src', 'meshes', filename)
+        if not os.path.exists(filepath):
+            return None
+        mesh = trimesh.load(filepath)
+        mesh.apply_scale(0.002)
+        mesh.visual.vertex_colors = np.array([100, 100, 200, 255], dtype=np.uint8)
+        return pyrender.Mesh.from_trimesh(mesh, smooth=True)
+    return _cached(f'ctrl_simple:{is_left}', _load)
 
 def load_gripper_mesh():
-    """加载真实夹爪STL模型"""
-    import os
-    filepath = 'src/meshes/夹爪.STL'
-    
-    if not os.path.exists(filepath):
-        return None
-    
-    mesh = trimesh.load(filepath)
-    mesh.apply_scale(0.002)  # mm转m，放大2倍
-    
-    # 将模型中心移到原点
-    center = (mesh.bounds[0] + mesh.bounds[1]) / 2
-    mesh.apply_translation(-center)
-    
-    # 设置颜色
-    mesh.visual.vertex_colors = np.array([180, 180, 180, 255], dtype=np.uint8)
-    
-    return pyrender.Mesh.from_trimesh(mesh, smooth=True)
-
+    """加载真实夹爪STL模型(缓存)"""
+    def _load():
+        filepath = 'src/meshes/夹爪.STL'
+        if not os.path.exists(filepath):
+            return None
+        mesh = trimesh.load(filepath)
+        mesh.apply_scale(0.002)
+        center = (mesh.bounds[0] + mesh.bounds[1]) / 2
+        mesh.apply_translation(-center)
+        mesh.visual.vertex_colors = np.array([180, 180, 180, 255], dtype=np.uint8)
+        return pyrender.Mesh.from_trimesh(mesh, smooth=True)
+    return _cached('gripper_single', _load)
 
 
 def load_gripper_pair():
-    """加载一对对称的夹爪"""
-    import os
-    filepath = 'src/meshes/夹爪.STL'
-    
-    if not os.path.exists(filepath):
-        return None, None
-    
-    mesh_base = trimesh.load(filepath)
-    mesh_base.apply_scale(0.002)
-    center = (mesh_base.bounds[0] + mesh_base.bounds[1]) / 2
-    mesh_base.apply_translation(-center)
-    
-    # 左夹爪
-    mesh_left = mesh_base.copy()
-    mesh_left.visual.vertex_colors = np.array([180, 180, 180, 255], dtype=np.uint8)
-    left_gripper = pyrender.Mesh.from_trimesh(mesh_left, smooth=True)
-    
-    # 右夹爪（Y轴镜像）
-    mesh_right = mesh_base.copy()
-    mirror = np.eye(4)
-    mirror[1, 1] = -1
-    mesh_right.apply_transform(mirror)
-    mesh_right.visual.vertex_colors = np.array([180, 180, 180, 255], dtype=np.uint8)
-    right_gripper = pyrender.Mesh.from_trimesh(mesh_right, smooth=True)
-    
-    return left_gripper, right_gripper
+    """加载一对对称的夹爪(缓存 — 原本每帧磁盘 reload,是主要卡顿源)"""
+    def _load():
+        filepath = 'src/meshes/夹爪.STL'
+        if not os.path.exists(filepath):
+            return (None, None)
+        mesh_base = trimesh.load(filepath)
+        mesh_base.apply_scale(0.002)
+        center = (mesh_base.bounds[0] + mesh_base.bounds[1]) / 2
+        mesh_base.apply_translation(-center)
+
+        mesh_left = mesh_base.copy()
+        mesh_left.visual.vertex_colors = np.array([180, 180, 180, 255], dtype=np.uint8)
+        left_gripper = pyrender.Mesh.from_trimesh(mesh_left, smooth=True)
+
+        mesh_right = mesh_base.copy()
+        mirror = np.eye(4)
+        mirror[1, 1] = -1
+        mesh_right.apply_transform(mirror)
+        mesh_right.visual.vertex_colors = np.array([180, 180, 180, 255], dtype=np.uint8)
+        right_gripper = pyrender.Mesh.from_trimesh(mesh_right, smooth=True)
+
+        return (left_gripper, right_gripper)
+    return _cached('gripper_pair', _load)
 
 
 def _gripper_boxes(opening_width, color=(1.0, 0.0, 0.0)):
@@ -493,13 +511,15 @@ def _compute_center_pose(t_left, t_right, tip_axis="z"):
 
 
 def _load_finger_mesh():
-    finger_path = os.path.join("src", "meshes", "finger.STL")
-    if not os.path.exists(finger_path):
-        return None
-    mesh = trimesh.load(finger_path)
-    mesh.apply_scale(FINGER_CALIBRATION_SCALE)
-    mesh.visual.vertex_colors = np.array([150, 150, 150, 255], dtype=np.uint8)
-    return pyrender.Mesh.from_trimesh(mesh, smooth=True)
+    def _load():
+        finger_path = os.path.join("src", "meshes", "finger.STL")
+        if not os.path.exists(finger_path):
+            return None
+        mesh = trimesh.load(finger_path)
+        mesh.apply_scale(FINGER_CALIBRATION_SCALE)
+        mesh.visual.vertex_colors = np.array([150, 150, 150, 255], dtype=np.uint8)
+        return pyrender.Mesh.from_trimesh(mesh, smooth=True)
+    return _cached('finger_mesh', _load)
 
 
 def _load_finger_calibration(calibration_path=None):
@@ -776,7 +796,13 @@ class CombinedVisualizer:
             color_img, _ = renderer.render(scene, flags=RenderFlags.RGBA)
             return color_img[:, :, :3]
 
-        pts = np.array([p[:3, 3] for p in poses[:current_idx + 1]], dtype=np.float64)
+        # 复用预计算位置数组(episode 级别缓存)
+        robot_prefix = f'robot{robot_id}'
+        positions = self.data.get(robot_prefix, {}).get('positions')
+        if positions is not None and len(positions) > current_idx:
+            pts = positions[:current_idx + 1]
+        else:
+            pts = np.array([p[:3, 3] for p in poses[:current_idx + 1]], dtype=np.float64)
 
         line_mesh = _line_mesh(pts, color=color, radius=0.01)
         if line_mesh:
@@ -842,13 +868,36 @@ class CombinedVisualizer:
         colors = {0: [1, 0, 0], 1: [0, 1, 0]}
         all_pts = []
 
+        # 静态 mesh 缓存(原本每帧都重建 — 是卡顿主因之一)
+        def _make_wrist():
+            cyl = trimesh.creation.cylinder(radius=0.02, height=0.04, sections=16)
+            cyl.visual.vertex_colors = np.array([150, 150, 150, 255], dtype=np.uint8)
+            return pyrender.Mesh.from_trimesh(cyl, smooth=False)
+        def _make_base():
+            box = trimesh.creation.box(extents=[0.04, 0.16, 0.025])
+            box.visual.vertex_colors = np.array([130, 130, 130, 255], dtype=np.uint8)
+            return pyrender.Mesh.from_trimesh(box, smooth=False)
+        wrist_mesh = _cached('base_wrist_cyl', _make_wrist)
+        base_mesh = _cached('base_gripper_box', _make_base)
+        axis_small = _axis_mesh(size=0.06)
+        cad_box = _placeholder_cad_box()
+        gripper_pair = load_gripper_pair()
+
+        from scipy.spatial.transform import Rotation as _Rot
+        ctrl_rot90y = _Rot.from_euler('y', 90, degrees=True).as_matrix()
+
         for r in ROBOT_IDS:
             prefix = f'robot{r}'
             poses = self.data[prefix].get('poses', [])
             if not poses or current_idx >= len(poses):
                 continue
 
-            pts = np.array([p[:3, 3] for p in poses[:current_idx + 1]], dtype=np.float64)
+            # 复用 load_episode_data 预计算的 positions 数组,避免每帧 O(N) list comp
+            positions = self.data[prefix].get('positions')
+            if positions is not None and len(positions) > current_idx:
+                pts = positions[:current_idx + 1]
+            else:
+                pts = np.array([p[:3, 3] for p in poses[:current_idx + 1]], dtype=np.float64)
             all_pts.append(pts)
 
             line_mesh = _line_mesh(pts, color=colors[r], radius=0.01)
@@ -860,62 +909,40 @@ class CombinedVisualizer:
                 scene.add(pts_mesh)
 
             frame_pose = poses[current_idx]
-            scene.add(_axis_mesh(size=0.06), pose=frame_pose)
+            scene.add(axis_small, pose=frame_pose)
             cad_offset = np.eye(4)
             cad_offset[0, 3] = -0.05
-            scene.add(_placeholder_cad_box(), pose=frame_pose @ cad_offset)
+            scene.add(cad_box, pose=frame_pose @ cad_offset)
 
             gripper = self.data[prefix].get('gripper', [])
             if gripper and current_idx < len(gripper):
-                # 加载一对真实夹爪
-                left_gripper, right_gripper = load_gripper_pair()
+                left_gripper, right_gripper = gripper_pair
                 if left_gripper and right_gripper:
-                    # 左夹爪
-                    left_tf = np.eye(4)
-                    left_tf[:3, 3] = [0.05, -0.06, -0.03]
+                    left_tf = np.eye(4); left_tf[:3, 3] = [0.05, -0.06, -0.03]
                     scene.add(left_gripper, pose=frame_pose @ left_tf)
-                    
-                    # 右夹爪
-                    right_tf = np.eye(4)
-                    right_tf[:3, 3] = [0.05, 0.06, -0.03]
+                    right_tf = np.eye(4); right_tf[:3, 3] = [0.05, 0.06, -0.03]
                     scene.add(right_gripper, pose=frame_pose @ right_tf)
                 else:
-                    # 备用
-                    (left_mesh, left_pose), (right_mesh, right_pose) = _gripper_boxes(float(gripper[current_idx]))
-                    scene.add(left_mesh, pose=frame_pose @ left_pose)
-                    scene.add(right_mesh, pose=frame_pose @ right_pose)
+                    (left_m, left_pose), (right_m, right_pose) = _gripper_boxes(float(gripper[current_idx]))
+                    scene.add(left_m, pose=frame_pose @ left_pose)
+                    scene.add(right_m, pose=frame_pose @ right_pose)
 
                 if self.finger_calibrations and self.finger_calibrations.get(r) and self.finger_mesh:
                     center_pose, left_pose, right_pose = _finger_poses_from_width(float(gripper[current_idx]), self.finger_calibrations[r])
                     self.finger_center_poses[r] = frame_pose @ center_pose
                     scene.add(self.finger_mesh, pose=frame_pose @ left_pose)
                     scene.add(self.finger_mesh, pose=frame_pose @ right_pose)
-            
-            # 手腕连接件（圆柱）
-            wrist = trimesh.creation.cylinder(radius=0.02, height=0.04, sections=16)
-            wrist.visual.vertex_colors = np.array([150, 150, 150, 255], dtype=np.uint8)
-            wrist_mesh = pyrender.Mesh.from_trimesh(wrist, smooth=False)
-            wrist_tf = np.eye(4)
-            wrist_tf[:3, 3] = [0, 0, 0.01]  # 手柄下方
+
+            wrist_tf = np.eye(4); wrist_tf[:3, 3] = [0, 0, 0.01]
             scene.add(wrist_mesh, pose=frame_pose @ wrist_tf)
-            
-            # 夹爪底座
-            base = trimesh.creation.box(extents=[0.04, 0.16, 0.025])
-            base.visual.vertex_colors = np.array([130, 130, 130, 255], dtype=np.uint8)
-            base_mesh = pyrender.Mesh.from_trimesh(base, smooth=False)
-            base_tf = np.eye(4)
-            base_tf[:3, 3] = [0, 0, -0.01]  # 手腕下方
+            base_tf = np.eye(4); base_tf[:3, 3] = [0, 0, -0.01]
             scene.add(base_mesh, pose=frame_pose @ base_tf)
-            
-            # Quest手柄（垂直向上）
-            ctrl = _quest_controller_mesh(is_left=(r==1))  # 左手装右手柄，右手装左手柄
+
+            ctrl = _quest_controller_mesh(is_left=(r == 1))
             if ctrl:
-                from scipy.spatial.transform import Rotation
                 ctrl_tf = np.eye(4)
-                # 旋转90度使其垂直
-                rot = Rotation.from_euler('y', 90, degrees=True).as_matrix()
-                ctrl_tf[:3, :3] = rot
-                ctrl_tf[:3, 3] = [0, 0, 0.03]  # 在底座上方
+                ctrl_tf[:3, :3] = ctrl_rot90y
+                ctrl_tf[:3, 3] = [0, 0, 0.03]
                 scene.add(ctrl, pose=frame_pose @ ctrl_tf)
                 
 

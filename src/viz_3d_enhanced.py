@@ -10,6 +10,36 @@ import pyrender
 from scipy.spatial.transform import Rotation
 import os
 
+_FONT_CACHE = {}
+
+
+def _get_unicode_font(size=20):
+    """缓存 PIL 字体 — 原本每次文本绘制都扫磁盘查找字体,是 _put_text_unicode 主要开销。"""
+    if size in _FONT_CACHE:
+        return _FONT_CACHE[size]
+    font_candidates = [
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "/usr/share/fonts/truetype/arphic/uming.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/STHeiti Light.ttc",
+        "C:/Windows/Fonts/msyh.ttc",
+        "C:/Windows/Fonts/simhei.ttf",
+    ]
+    font = None
+    for path in font_candidates:
+        if os.path.exists(path):
+            try:
+                font = ImageFont.truetype(path, size)
+                break
+            except Exception:
+                continue
+    if font is None:
+        font = ImageFont.load_default()
+    _FONT_CACHE[size] = font
+    return font
+
+
 class Enhanced3DVisualizer(CombinedVisualizer):
     """3D增强可视化器 / Enhanced 3D Visualizer"""
     
@@ -180,11 +210,21 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         
         # Gripper axis visualization size
         self._gripper_axis_size = gripper_axis_size
-        
+
         # Language settings (default: Chinese)
         self._language = 'zh'
-        
+
+        # Plot background cache (invalidated on episode change)
+        self._plot_cache = None
+        self._plot_cache_key = None
+
         super().__init__(*args, **kwargs)
+
+    def load_episode(self):
+        # 切换 episode 时清空绘图缓存
+        self._plot_cache = None
+        self._plot_cache_key = None
+        super().load_episode()
     
     def _t(self, key):
         """Translate text based on current language"""
@@ -198,62 +238,34 @@ class Enhanced3DVisualizer(CombinedVisualizer):
             # Fallback to ASCII-safe output if terminal doesn't support Unicode
             print(text.encode('ascii', 'replace').decode('ascii'))
     
-    def _put_text_unicode(self, img, text, position, font_size=20, color=(255, 255, 255), font_path=None):
+    def _put_text_unicode(self, img, text, position, font_size=20, color=(255, 255, 255), font_path=None, is_rgb=False):
+        """用 PIL 在 OpenCV 图上画 Unicode 文本。字体全局缓存,避免每次查磁盘。
+
+        is_rgb: 输入/输出图像是否已是 RGB(跳过两次 cvtColor 转换)。
+        color: 按 BGR 约定传入,转 PIL 时自动反转。
         """
-        Put Unicode text (including Chinese) on OpenCV image using PIL
-        
-        Args:
-            img: OpenCV image (BGR format)
-            text: Text to display (can contain Chinese characters)
-            position: (x, y) tuple for text position
-            font_size: Font size in pixels
-            color: Text color in BGR format (default white)
-            font_path: Path to TrueType font file (optional)
-        
-        Returns:
-            Modified image
-        """
-        # Convert OpenCV BGR to PIL RGB
-        img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+        if is_rgb:
+            img_pil = Image.fromarray(img)
+        else:
+            img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+
         draw = ImageDraw.Draw(img_pil)
-        
-        # Try to load a font that supports Chinese
-        try:
-            if font_path and os.path.exists(font_path):
+        if font_path and os.path.exists(font_path):
+            try:
                 font = ImageFont.truetype(font_path, font_size)
-            else:
-                # Try common Chinese fonts on different platforms
-                font_candidates = [
-                    # Linux
-                    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-                    "/usr/share/fonts/truetype/arphic/uming.ttc",
-                    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-                    # macOS
-                    "/System/Library/Fonts/PingFang.ttc",
-                    "/System/Library/Fonts/STHeiti Light.ttc",
-                    # Windows (if running under WSL or Wine)
-                    "C:/Windows/Fonts/msyh.ttc",
-                    "C:/Windows/Fonts/simhei.ttf",
-                ]
-                
-                font = None
-                for font_candidate in font_candidates:
-                    if os.path.exists(font_candidate):
-                        font = ImageFont.truetype(font_candidate, font_size)
-                        break
-                
-                if font is None:
-                    # Fallback to default font (doesn't support Chinese well)
-                    font = ImageFont.load_default()
-        except Exception as e:
-            # If all fails, use default font
-            font = ImageFont.load_default()
-        
-        # Draw text
-        draw.text(position, text, font=font, fill=color[::-1])  # BGR to RGB
-        
-        # Convert back to OpenCV BGR
-        return cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+            except Exception:
+                font = _get_unicode_font(font_size)
+        else:
+            font = _get_unicode_font(font_size)
+
+        # Pillow fill 接受 RGB;颜色参数按 BGR 调用约定,反转一下
+        rgb_color = (color[2], color[1], color[0]) if len(color) >= 3 else color
+        draw.text(position, text, font=font, fill=rgb_color)
+
+        arr = np.array(img_pil)
+        if is_rgb:
+            return arr
+        return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
     
     def _switch_language(self):
         """Toggle between Chinese and English"""
@@ -515,7 +527,12 @@ class Enhanced3DVisualizer(CombinedVisualizer):
             if not poses or current_idx >= len(poses):
                 continue
 
-            pts = np.array([p[:3, 3] for p in poses[:current_idx + 1]], dtype=np.float64)
+            # 复用预计算位置(O(1) 切片,原本 O(N) 每帧重建)
+            positions = self.data[prefix].get('positions')
+            if positions is not None and len(positions) > current_idx:
+                pts = positions[:current_idx + 1]
+            else:
+                pts = np.array([p[:3, 3] for p in poses[:current_idx + 1]], dtype=np.float64)
 
             line_mesh = _line_mesh(pts, color=colors[r], radius=0.012)
             if line_mesh:
@@ -575,30 +592,32 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         color_img, _ = self.renderers['world'].render(scene, flags=RenderFlags.RGBA)
         return color_img[:, :, :3]
     
-    def _create_trajectory_plots(self, frame_idx):
-        """创建轨迹曲线图面板 - 虚线预览+实线高亮"""
+    def _build_plot_cache(self):
+        """预计算本 episode 的绘图数据 + 静态背景(虚线/标题/图例/刻度)。
+
+        背景在整段 episode 不变,每帧只 copy + 画实线。
+        """
         w, h = 450, 750
-        panel = np.zeros((h, w, 3), dtype=np.uint8)
-        panel[:] = [25, 30, 40]
-        
-        cv2.rectangle(panel, (0, 0), (w, 40), (15, 20, 30), -1)
-        # Use Unicode-safe text rendering for Chinese
-        panel = self._put_text_unicode(
-            cv2.cvtColor(panel, cv2.COLOR_RGB2BGR),
-            self._t('realtime_trajectory'),
-            (15, 5),
-            font_size=18,
-            color=(220, 220, 220, 220)
-        )
-        panel = cv2.cvtColor(panel, cv2.COLOR_BGR2RGB)
-        
-        y_offset = 50
+        y_offset_init = 50
         plot_h = 110
         plot_w = w - 50
         plot_x_start = 40
-        
+
         max_frames = len(self.data['robot0']['poses'])
-        
+
+        # 收集每 robot 的 RPY 和 gripper(per-episode 只算一次)
+        from scipy.spatial.transform import Rotation as R
+        rpy_by_robot = {}
+        grip_by_robot = {}
+        for r in ROBOT_IDS:
+            prefix = f'robot{r}'
+            poses = self.data[prefix].get('poses', [])
+            if poses:
+                rpy_by_robot[r] = R.from_matrix(np.stack([p[:3, :3] for p in poses])).as_euler('xyz', degrees=True)
+            g = self.data[prefix].get('gripper', [])
+            if g:
+                grip_by_robot[r] = np.asarray(g, dtype=np.float64)
+
         plots = [
             (self._t('left_gripper_position'), 'position', 0, ['robot0'], ['X', 'Y', 'Z'], [(255, 10, 10), (10, 255, 10), (10, 10, 255)]),
             (self._t('left_gripper_rotation'), 'rotation', 0, ['robot0'], ['Roll', 'Pitch', 'Yaw'], [(255, 0, 0), (0, 255, 0), (0, 0, 255)]),
@@ -606,192 +625,140 @@ class Enhanced3DVisualizer(CombinedVisualizer):
             (self._t('right_gripper_rotation'), 'rotation', 1, ['robot1'], ['Roll', 'Pitch', 'Yaw'], [(255, 0, 0), (0, 255, 0), (0, 0, 255)]),
             (self._t('gripper_width'), 'gripper', None, ['robot0', 'robot1'], [self._t('left_gripper'), self._t('right_gripper')], [(255, 100, 100), (100, 255, 100)]),
         ]
-        
-        for plot_name, plot_type, robot_id, robots, labels, colors in plots:
-            # Use Unicode-safe text rendering for plot titles
-            panel = cv2.cvtColor(panel, cv2.COLOR_RGB2BGR)
-            panel = self._put_text_unicode(
-                panel,
-                plot_name,
-                (15, y_offset - 5),
-                font_size=16,
-                color=(200, 200, 200)
-            )
-            panel = cv2.cvtColor(panel, cv2.COLOR_BGR2RGB)
-            y_offset += 20
-            
-            cv2.rectangle(panel, (plot_x_start, y_offset), (plot_x_start + plot_w, y_offset + plot_h - 20), 
-                         (35, 40, 50), -1)
-            cv2.rectangle(panel, (plot_x_start, y_offset), (plot_x_start + plot_w, y_offset + plot_h - 20), 
-                         (60, 65, 75), 1)
-            
-            if plot_type == 'position':
-                prefix = f'robot{robot_id}'
-                poses = self.data[prefix].get('poses', [])
-                
-                if poses and len(poses) > 0:
-                    all_positions = np.array([poses[i][:3, 3] for i in range(len(poses))])
-                    
-                    for axis_idx, (axis_name, color) in enumerate(zip(labels, colors)):
-                        if len(all_positions) > 1:
-                            data = all_positions[:, axis_idx]
-                            data_min, data_max = data.min(), data.max()
-                            data_range = data_max - data_min if data_max > data_min else 1.0
-                            
-                            # 虚线（整条轨迹）
-                            for i in range(1, len(data)):
-                                x1 = int(plot_x_start + (i - 1) / max_frames * plot_w)
-                                y1 = int(y_offset + (plot_h - 20) - ((data[i-1] - data_min) / data_range) * (plot_h - 30))
-                                x2 = int(plot_x_start + i / max_frames * plot_w)
-                                y2 = int(y_offset + (plot_h - 20) - ((data[i] - data_min) / data_range) * (plot_h - 30))
-                                dark_color = tuple(int(c * 0.3) for c in color)
-                                cv2.line(panel, (x1, y1), (x2, y2), dark_color, 1, cv2.LINE_AA)
-                            
-                            # 实线（当前进度）
-                            for i in range(1, min(frame_idx + 1, len(data))):
-                                x1 = int(plot_x_start + (i - 1) / max_frames * plot_w)
-                                y1 = int(y_offset + (plot_h - 20) - ((data[i-1] - data_min) / data_range) * (plot_h - 30))
-                                x2 = int(plot_x_start + i / max_frames * plot_w)
-                                y2 = int(y_offset + (plot_h - 20) - ((data[i] - data_min) / data_range) * (plot_h - 30))
-                                cv2.line(panel, (x1, y1), (x2, y2), color, 2, cv2.LINE_AA)
-                            
-                            # Y轴标签（按颜色区分，位置错开）
-                            label_x = 5
-                            label_y_up = y_offset + 10 + axis_idx * 12
-                            label_y_down = y_offset + plot_h - 25 - axis_idx * 12
-                            cv2.putText(panel, f"{data_max:.3f}", (label_x, label_y_up), 
-                                       cv2.FONT_HERSHEY_SIMPLEX, 0.3, color, 1, cv2.LINE_AA)
-                            cv2.putText(panel, f"{data_min:.3f}", (label_x, label_y_down), 
-                                       cv2.FONT_HERSHEY_SIMPLEX, 0.3, color, 1, cv2.LINE_AA)
-                    
-                    # X轴标签
-                    cv2.putText(panel, "0", (plot_x_start, y_offset + plot_h - 5), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.3, (150, 150, 150), 1, cv2.LINE_AA)
-                    cv2.putText(panel, f"{max_frames}", (plot_x_start + plot_w - 20, y_offset + plot_h - 5), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.3, (150, 150, 150), 1, cv2.LINE_AA)
-                    
-                    # 图例
-                    legend_x = plot_x_start + 5
-                    for axis_name, color in zip(labels, colors):
-                        cv2.circle(panel, (legend_x, y_offset + 10), 4, color, -1)
-                        cv2.putText(panel, axis_name, (legend_x + 10, y_offset + 13), 
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1, cv2.LINE_AA)
-                        legend_x += 40
-            
-            
-            elif plot_type == 'rotation':
-                # Extract Roll/Pitch/Yaw from pose matrix
-                prefix = f'robot{robot_id}'
-                poses = self.data[prefix].get('poses', [])
-                
-                if poses and len(poses) > 0:
-                    from scipy.spatial.transform import Rotation as R
-                    all_rpy = []
-                    for pose in poses:
-                        rot_matrix = pose[:3, :3]
-                        r = R.from_matrix(rot_matrix)
-                        rpy = r.as_euler('xyz', degrees=True)  # Roll, Pitch, Yaw
-                        all_rpy.append(rpy)
-                    
-                    all_rpy = np.array(all_rpy)
-                    
-                    for axis_idx, (axis_name, color) in enumerate(zip(labels, colors)):
-                        if len(all_rpy) > 1:
-                            data = all_rpy[:, axis_idx]
-                            data_min, data_max = data.min(), data.max()
-                            data_range = data_max - data_min if data_max > data_min else 1.0
-                            
-                            # 虚线（全轨迹）
-                            for i in range(1, len(data)):
-                                x1 = int(plot_x_start + (i - 1) / max_frames * plot_w)
-                                y1 = int(y_offset + (plot_h - 20) - ((data[i-1] - data_min) / data_range) * (plot_h - 30))
-                                x2 = int(plot_x_start + i / max_frames * plot_w)
-                                y2 = int(y_offset + (plot_h - 20) - ((data[i] - data_min) / data_range) * (plot_h - 30))
-                                dark_color = tuple(int(c * 0.3) for c in color)
-                                cv2.line(panel, (x1, y1), (x2, y2), dark_color, 1, cv2.LINE_AA)
-                            
-                            # 实线（当前进度）
-                            for i in range(1, min(frame_idx + 1, len(data))):
-                                x1 = int(plot_x_start + (i - 1) / max_frames * plot_w)
-                                y1 = int(y_offset + (plot_h - 20) - ((data[i-1] - data_min) / data_range) * (plot_h - 30))
-                                x2 = int(plot_x_start + i / max_frames * plot_w)
-                                y2 = int(y_offset + (plot_h - 20) - ((data[i] - data_min) / data_range) * (plot_h - 30))
-                                cv2.line(panel, (x1, y1), (x2, y2), color, 2, cv2.LINE_AA)
-                            
-                            # Y轴标签（按颜色错开）
-                            label_x = 5
-                            label_y_up = y_offset + 10 + axis_idx * 12
-                            label_y_down = y_offset + plot_h - 25 - axis_idx * 12
-                            cv2.putText(panel, f"{data_max:.2f}", (label_x, label_y_up), 
-                                       cv2.FONT_HERSHEY_SIMPLEX, 0.3, color, 1, cv2.LINE_AA)
-                            cv2.putText(panel, f"{data_min:.2f}", (label_x, label_y_down), 
-                                       cv2.FONT_HERSHEY_SIMPLEX, 0.3, color, 1, cv2.LINE_AA)
-                    
-                    # 图例
-                    legend_x = plot_x_start + 5
-                    for axis_name, color in zip(labels, colors):
-                        cv2.circle(panel, (legend_x, y_offset + 10), 4, color, -1)
-                        cv2.putText(panel, axis_name, (legend_x + 10, y_offset + 13), 
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1, cv2.LINE_AA)
-                        legend_x += 60
-            
-            elif plot_type == 'gripper':
-                all_gripper_series = []
-                for robot_prefix in robots:
-                    gripper_data = self.data[robot_prefix].get('gripper', [])
-                    if gripper_data and len(gripper_data) > 0:
-                        all_gripper_series.append(np.array([gripper_data[i] for i in range(len(gripper_data))]))
 
-                if all_gripper_series:
-                    all_grippers_concat = np.concatenate(all_gripper_series)
-                    data_min, data_max = all_grippers_concat.min(), all_grippers_concat.max()
+        # 初始化背景(标题栏 + 空白底色)
+        background = np.full((h, w, 3), [25, 30, 40], dtype=np.uint8)
+        cv2.rectangle(background, (0, 0), (w, 40), (15, 20, 30), -1)
+        background = self._put_text_unicode(
+            background, self._t('realtime_trajectory'), (15, 5),
+            font_size=18, color=(220, 220, 220), is_rgb=True,
+        )
+
+        # 每 plot 存 solid-line 的 Nx2 坐标数组 + 颜色,每帧只切片 + polylines
+        line_specs = []  # list of (pts_int, color_bgr)
+        y_offset = y_offset_init
+
+        def _to_pts(values, data_min, data_range, y_off):
+            # 向量化计算 x/y 坐标
+            n = len(values)
+            xs = plot_x_start + (np.arange(n) / max_frames) * plot_w
+            ys = y_off + (plot_h - 20) - ((values - data_min) / data_range) * (plot_h - 30)
+            pts = np.stack([xs, ys], axis=1).astype(np.int32)
+            return pts
+
+        for plot_name, plot_type, robot_id, robots, labels, colors in plots:
+            background = self._put_text_unicode(
+                background, plot_name, (15, y_offset - 5),
+                font_size=16, color=(200, 200, 200), is_rgb=True,
+            )
+            y_offset += 20
+
+            cv2.rectangle(background, (plot_x_start, y_offset),
+                          (plot_x_start + plot_w, y_offset + plot_h - 20), (35, 40, 50), -1)
+            cv2.rectangle(background, (plot_x_start, y_offset),
+                          (plot_x_start + plot_w, y_offset + plot_h - 20), (60, 65, 75), 1)
+
+            if plot_type in ('position', 'rotation'):
+                prefix = f'robot{robot_id}'
+                if plot_type == 'position':
+                    arr = self.data[prefix].get('positions')
+                else:
+                    arr = rpy_by_robot.get(robot_id)
+
+                if arr is not None and len(arr) > 1:
+                    for axis_idx, (axis_name, color) in enumerate(zip(labels, colors)):
+                        values = arr[:, axis_idx]
+                        data_min, data_max = float(values.min()), float(values.max())
+                        data_range = data_max - data_min if data_max > data_min else 1.0
+                        pts = _to_pts(values, data_min, data_range, y_offset)
+
+                        # 虚线(暗色)整条轨迹 — 画到 background
+                        dark_color = tuple(int(c * 0.3) for c in color)
+                        cv2.polylines(background, [pts], False, dark_color, 1, cv2.LINE_AA)
+
+                        # 存 solid line 的点,每帧复用切片
+                        line_specs.append(('pos' if plot_type == 'position' else 'rot',
+                                           pts, color, 2))
+
+                        fmt = f"{data_max:.3f}" if plot_type == 'position' else f"{data_max:.2f}"
+                        fmt2 = f"{data_min:.3f}" if plot_type == 'position' else f"{data_min:.2f}"
+                        label_y_up = y_offset + 10 + axis_idx * 12
+                        label_y_down = y_offset + plot_h - 25 - axis_idx * 12
+                        cv2.putText(background, fmt, (5, label_y_up),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.3, color, 1, cv2.LINE_AA)
+                        cv2.putText(background, fmt2, (5, label_y_down),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.3, color, 1, cv2.LINE_AA)
+
+                    cv2.putText(background, "0", (plot_x_start, y_offset + plot_h - 5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.3, (150, 150, 150), 1, cv2.LINE_AA)
+                    cv2.putText(background, f"{max_frames}",
+                                (plot_x_start + plot_w - 20, y_offset + plot_h - 5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.3, (150, 150, 150), 1, cv2.LINE_AA)
+
+                    legend_x = plot_x_start + 5
+                    legend_step = 40 if plot_type == 'position' else 60
+                    for axis_name, color in zip(labels, colors):
+                        cv2.circle(background, (legend_x, y_offset + 10), 4, color, -1)
+                        cv2.putText(background, axis_name, (legend_x + 10, y_offset + 13),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1, cv2.LINE_AA)
+                        legend_x += legend_step
+
+            elif plot_type == 'gripper':
+                series = [grip_by_robot[r] for r in ROBOT_IDS if r in grip_by_robot]
+                if series:
+                    all_cat = np.concatenate(series)
+                    data_min, data_max = float(all_cat.min()), float(all_cat.max())
                     data_range = data_max - data_min if data_max > data_min else 0.01
 
-                    for robot_idx, (robot_prefix, label, color) in enumerate(zip(robots, labels, colors)):
-                        gripper_data = self.data[robot_prefix].get('gripper', [])
-                        if gripper_data and len(gripper_data) > 0:
-                            all_grippers = np.array([gripper_data[i] for i in range(len(gripper_data))])
+                    for (robot_prefix, label, color) in zip(robots, labels, colors):
+                        r_id = int(robot_prefix[-1])
+                        grip = grip_by_robot.get(r_id)
+                        if grip is None or len(grip) <= 1:
+                            continue
+                        pts = _to_pts(grip, data_min, data_range, y_offset)
+                        dark_color = tuple(int(c * 0.3) for c in color)
+                        cv2.polylines(background, [pts], False, dark_color, 1, cv2.LINE_AA)
+                        line_specs.append(('grip', pts, color, 2))
 
-                            if len(all_grippers) > 1:
-                                # 虚线（全部）
-                                for i in range(1, len(all_grippers)):
-                                    x1 = int(plot_x_start + (i - 1) / max_frames * plot_w)
-                                    y1 = int(y_offset + (plot_h - 20) - ((all_grippers[i-1] - data_min) / data_range) * (plot_h - 30))
-                                    x2 = int(plot_x_start + i / max_frames * plot_w)
-                                    y2 = int(y_offset + (plot_h - 20) - ((all_grippers[i] - data_min) / data_range) * (plot_h - 30))
-                                    dark_color = tuple(int(c * 0.3) for c in color)
-                                    cv2.line(panel, (x1, y1), (x2, y2), dark_color, 1, cv2.LINE_AA)
+                    cv2.putText(background, f"{data_max:.3f}", (5, y_offset + 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.28, (150, 150, 150), 1, cv2.LINE_AA)
+                    cv2.putText(background, f"{data_min:.3f}", (5, y_offset + plot_h - 25),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.28, (150, 150, 150), 1, cv2.LINE_AA)
 
-                                # 实线（当前）
-                                for i in range(1, min(frame_idx + 1, len(all_grippers))):
-                                    x1 = int(plot_x_start + (i - 1) / max_frames * plot_w)
-                                    y1 = int(y_offset + (plot_h - 20) - ((all_grippers[i-1] - data_min) / data_range) * (plot_h - 30))
-                                    x2 = int(plot_x_start + i / max_frames * plot_w)
-                                    y2 = int(y_offset + (plot_h - 20) - ((all_grippers[i] - data_min) / data_range) * (plot_h - 30))
-                                    cv2.line(panel, (x1, y1), (x2, y2), color, 2, cv2.LINE_AA)
-
-                    # Y轴标签（统一范围）
-                    cv2.putText(panel, f"{data_max:.3f}", (5, y_offset + 10), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.28, (150, 150, 150), 1, cv2.LINE_AA)
-                    cv2.putText(panel, f"{data_min:.3f}", (5, y_offset + plot_h - 25), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.28, (150, 150, 150), 1, cv2.LINE_AA)
-                
-                # X轴标签
-                cv2.putText(panel, "0", (plot_x_start, y_offset + plot_h - 5), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.3, (150, 150, 150), 1, cv2.LINE_AA)
-                cv2.putText(panel, f"{max_frames}", (plot_x_start + plot_w - 20, y_offset + plot_h - 5), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.3, (150, 150, 150), 1, cv2.LINE_AA)
-                
-                # 图例
+                cv2.putText(background, "0", (plot_x_start, y_offset + plot_h - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.3, (150, 150, 150), 1, cv2.LINE_AA)
+                cv2.putText(background, f"{max_frames}",
+                            (plot_x_start + plot_w - 20, y_offset + plot_h - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.3, (150, 150, 150), 1, cv2.LINE_AA)
                 legend_x = plot_x_start + 5
                 for label, color in zip(labels, colors):
-                    cv2.circle(panel, (legend_x, y_offset + 10), 4, color, -1)
-                    cv2.putText(panel, label, (legend_x + 10, y_offset + 13), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1, cv2.LINE_AA)
+                    cv2.circle(background, (legend_x, y_offset + 10), 4, color, -1)
+                    cv2.putText(background, label, (legend_x + 10, y_offset + 13),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1, cv2.LINE_AA)
                     legend_x += 50
-            
+
             y_offset += plot_h + 15
-        
+
+        return {
+            'background': background,
+            'line_specs': line_specs,
+        }
+
+    def _create_trajectory_plots(self, frame_idx):
+        """创建轨迹曲线图面板 - 虚线预览+实线高亮(缓存背景,帧内只画 solid 部分)"""
+        cache_key = getattr(self, '_plot_cache_key', None)
+        if cache_key != self.ep_idx or self._plot_cache is None:
+            self._plot_cache = self._build_plot_cache()
+            self._plot_cache_key = self.ep_idx
+
+        panel = self._plot_cache['background'].copy()
+        solid_end = frame_idx + 1
+        for kind, pts, color, thickness in self._plot_cache['line_specs']:
+            if solid_end <= 1:
+                continue
+            seg = pts[:solid_end]
+            if len(seg) >= 2:
+                cv2.polylines(panel, [seg], False, color, thickness, cv2.LINE_AA)
         return panel
     
     def render_frame(self, frame_idx):
@@ -829,40 +796,25 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         header = np.zeros((h, w, 3), dtype=np.uint8)
         header[:] = [20, 25, 35]
         
-        # Title with language support using Unicode-safe rendering
         title = self._t('window_title')
         header = self._put_text_unicode(
-            cv2.cvtColor(header, cv2.COLOR_RGB2BGR),
-            title,
-            (20, 8),
-            font_size=24,
-            color=(255, 255, 255, 255)
+            header, title, (20, 8),
+            font_size=24, color=(255, 255, 255), is_rgb=True,
         )
-        header = cv2.cvtColor(header, cv2.COLOR_BGR2RGB)
-        
+
         cv2.circle(header, (280, 30), 6, (100, 255, 100), -1)
-        # Use Unicode-safe text rendering for Speed label
-        header = cv2.cvtColor(header, cv2.COLOR_RGB2BGR)
         header = self._put_text_unicode(
-            header,
-            f"{self._t('speed')}: {self.playback_speed}x",
-            (300, 20),
-            font_size=18,
-            color=(150, 150, 150)
+            header, f"{self._t('speed')}: {self.playback_speed}x", (300, 20),
+            font_size=18, color=(150, 150, 150), is_rgb=True,
         )
-        header = cv2.cvtColor(header, cv2.COLOR_BGR2RGB)
-        
+
         ep_id, max_frames = self.episodes[self.ep_idx], len(self.data['robot0']['poses'])
-        # Use Unicode-safe text rendering for Episode/Frame info
-        header = cv2.cvtColor(header, cv2.COLOR_RGB2BGR)
         header = self._put_text_unicode(
             header,
             f"{self._t('ep')} {ep_id+1}/{len(self.episodes)} | {self._t('frame')} {frame_idx}/{max_frames-1}",
             (w - 400, 20),
-            font_size=18,
-            color=(200, 200, 200)
+            font_size=18, color=(200, 200, 200), is_rgb=True,
         )
-        header = cv2.cvtColor(header, cv2.COLOR_BGR2RGB)
         return header
     
     def _resize_with_label_unicode(self, img, label, height, color=(255, 255, 255)):
@@ -876,27 +828,16 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         has_unicode = any(ord(char) > 127 for char in label)
         
         if has_unicode:
-            # Use PIL for Unicode text with outline effect
-            # Draw white outline (slightly offset in multiple directions for better outline)
+            # 描边 — 在 RGB 空间直接绘制,避免 9×4 次 cvtColor
             for dx, dy in [(-1, -1), (-1, 1), (1, -1), (1, 1), (-2, 0), (2, 0), (0, -2), (0, 2)]:
                 resized = self._put_text_unicode(
-                    cv2.cvtColor(resized, cv2.COLOR_RGB2BGR),
-                    label,
-                    (10 + dx, 7 + dy),
-                    font_size=18,
-                    color=(255, 255, 255)
+                    resized, label, (10 + dx, 7 + dy),
+                    font_size=18, color=(255, 255, 255), is_rgb=True,
                 )
-                resized = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
-            
-            # Draw colored text on top
             resized = self._put_text_unicode(
-                cv2.cvtColor(resized, cv2.COLOR_RGB2BGR),
-                label,
-                (10, 7),
-                font_size=18,
-                color=color
+                resized, label, (10, 7),
+                font_size=18, color=color, is_rgb=True,
             )
-            resized = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
         else:
             # Use original cv2.putText for ASCII text (English) - better rendering
             cv2.putText(resized, label, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
@@ -925,15 +866,10 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         panel[:] = [25, 30, 40]
         cv2.rectangle(panel, (0, 0), (panel.shape[1], header_h), (15, 20, 30), -1)
         cv2.circle(panel, (15, header_h//2), 5, color, -1)
-        # Use Unicode-safe text rendering for robot label
         panel = self._put_text_unicode(
-            cv2.cvtColor(panel, cv2.COLOR_RGB2BGR),
-            label,
-            (30, 5),
-            font_size=18,
-            color=(220, 220, 220)
+            panel, label, (30, 5),
+            font_size=18, color=(220, 220, 220), is_rgb=True,
         )
-        panel = cv2.cvtColor(panel, cv2.COLOR_BGR2RGB)
         panel[header_h:, :] = img
         return panel
     
@@ -957,16 +893,10 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         
         # 倍速按钮
         speed_x = bar_x2 + 20
-        # Use Unicode-safe text rendering for Speed label
-        bar = cv2.cvtColor(bar, cv2.COLOR_RGB2BGR)
         bar = self._put_text_unicode(
-            bar,
-            self._t('speed') + ":",
-            (speed_x, 8),
-            font_size=16,
-            color=(150, 150, 150)
+            bar, self._t('speed') + ":", (speed_x, 8),
+            font_size=16, color=(150, 150, 150), is_rgb=True,
         )
-        bar = cv2.cvtColor(bar, cv2.COLOR_BGR2RGB)
         
         speeds = [0.25, 0.5, 1.0, 2.0, 5.0]
         btn_w, btn_h = 50, 25
@@ -1004,17 +934,12 @@ class Enhanced3DVisualizer(CombinedVisualizer):
         panel[:] = [25, 30, 40]
         cv2.rectangle(panel, (0, 0), (panel.shape[1], header_h), (15, 20, 30), -1)
         cv2.circle(panel, (15, header_h//2), 5, color, -1)
-        
-        # Use Unicode-safe text rendering for panel title
+
         panel = self._put_text_unicode(
-            cv2.cvtColor(panel, cv2.COLOR_RGB2BGR),
-            title,
-            (30, 5),
-            font_size=18,
-            color=(220, 220, 220, 220)
+            panel, title, (30, 5),
+            font_size=18, color=(220, 220, 220), is_rgb=True,
         )
-        panel = cv2.cvtColor(panel, cv2.COLOR_BGR2RGB)
-        
+
         panel[header_h+border:header_h+border+img.shape[0], border:border+img.shape[1]] = img
         return panel
     
