@@ -11,3 +11,4 @@ charset-normalizer>=3.3.2
 pillow>=8.3.0
 matplotlib>=3.4.0
 pyglet<2
+rerun-sdk>=0.16.0
